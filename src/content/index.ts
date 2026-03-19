@@ -75,14 +75,8 @@ async function init(): Promise<void> {
   // Inject script to intercept API responses on streaming sites
   injectApiInterceptor();
 
-  // Load saved cues
-  const savedCues = await storage.getCues();
-  console.log('[FFProfanity] Saved cues:', savedCues.length);
-  if (savedCues.length > 0) {
-    processCues(savedCues);
-  } else {
-    console.log('[FFProfanity] No saved cues - using auto-detection or upload required');
-  }
+  // Clear any old saved cues - user prefers per-session only
+  await storage.clearCues();
 
   // Scan for existing subtitle tracks
   await scanForTracks();
@@ -99,7 +93,7 @@ async function init(): Promise<void> {
 
   // Listen for messages from background and popup
   browser.runtime.onMessage.addListener(handleMessage);
-  
+
   console.log('[FFProfanity] Content script ready');
 }
 
@@ -163,13 +157,38 @@ function injectApiInterceptor(): void {
             // Also check for subtitle file requests
             if (url.match(/\\.vtt|\\.srt|\\.ass/i) && !url.includes('blob:')) {
               console.log('[FFProfanity] Intercepted subtitle URL:', url);
+              
+              // Try to extract language from URL
+              let language = 'unknown';
+              let label = 'Detected subtitle';
+              
+              // Common patterns: en_subtitle.vtt, subtitle.en.vtt, /en/xxx.vtt, lang=en
+              const langPatterns = [
+                /[?&]lang=([a-z]{2,3})/i,
+                /\/([a-z]{2,3})\/[^/]+\.vtt$/i,
+                /\/([a-z]{2,3})_[a-f0-9]+\.vtt$/i, // LookMovie: en_hash.vtt
+                /\.([a-z]{2,3})\.vtt$/i,
+                /_([a-z]{2,3})\.vtt$/i,
+              ];
+              
+              for (const pattern of langPatterns) {
+                const match = url.match(pattern);
+                if (match) {
+                  language = match[1].toLowerCase();
+                  // Convert common codes to display names
+                  const langNames = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese', ko: 'Korean', zh: 'Chinese' };
+                  label = langNames[language] || language.toUpperCase();
+                  break;
+                }
+              }
+              
               window.postMessage({
                 type: 'FFPROFANITY_SUBTITLES_DETECTED',
                 source: 'xhr',
                 subtitles: [{
                   url: url,
-                  language: 'unknown',
-                  label: 'Detected subtitle'
+                  language: language,
+                  label: label
                 }]
               }, '*');
             }
@@ -224,13 +243,67 @@ function injectApiInterceptor(): void {
           // Check for common state patterns in window
           if (window.movie_storage) {
             console.log('[FFProfanity] Found movie_storage');
-            // The background will need to fetch the API
+            const storage = window.movie_storage;
+            
+            // Log the structure for debugging
+            console.log('[FFProfanity] movie_storage keys:', Object.keys(storage));
+            console.log('[FFProfanity] movie_storage sample:', JSON.stringify(storage).substring(0, 2000));
+            
+            // Try to find subtitles in various properties
+            const subtitleProps = ['subtitles', 'subs', 'captions', 'cc', 'tracks'];
+            for (const prop of subtitleProps) {
+              if (storage[prop]) {
+                console.log('[FFProfanity] Found ' + prop + ' in movie_storage:', storage[prop]);
+                extractAndSendSubtitles(storage[prop], 'movie_storage.' + prop);
+              }
+            }
+            
+            // Check for nested structures
+            if (storage.data && storage.data.subtitles) {
+              console.log('[FFProfanity] Found data.subtitles:', storage.data.subtitles);
+              extractAndSendSubtitles(storage.data.subtitles, 'movie_storage.data.subtitles');
+            }
+            
+            if (storage.streams) {
+              // Some sites put subtitles under streams
+              for (const stream of storage.streams) {
+                if (stream.subtitles) {
+                  console.log('[FFProfanity] Found subtitles in stream:', stream.subtitles);
+                  extractAndSendSubtitles(stream.subtitles, 'movie_storage.streams.subtitles');
+                }
+              }
+            }
           }
         };
         
-        // Check immediately and after a delay
+        // Helper to extract and send subtitles
+        function extractAndSendSubtitles(subs, source) {
+          if (!Array.isArray(subs)) {
+            console.log('[FFProfanity] Subtitles not an array:', subs);
+            return;
+          }
+          
+          const subtitles = subs.map(sub => ({
+            url: sub.file || sub.url || sub.downloadLink || sub.src,
+            language: sub.language || sub.lang || sub.code || 'unknown',
+            label: sub.label || sub.name || sub.language || 'Unknown'
+          })).filter(s => s.url);
+          
+          if (subtitles.length > 0) {
+            console.log('[FFProfanity] Sending ' + subtitles.length + ' subtitles from ' + source);
+            window.postMessage({
+              type: 'FFPROFANITY_SUBTITLES_DETECTED',
+              source: source,
+              subtitles: subtitles
+            }, '*');
+          }
+        }
+
+        // Check immediately and after delays
         checkForData();
-        setTimeout(checkForData, 2000);
+        setTimeout(checkForData, 1000);
+        setTimeout(checkForData, 3000);
+        setTimeout(checkForData, 5000);
       });
     })();
   `;
@@ -248,13 +321,15 @@ function injectApiInterceptor(): void {
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
   if (event.data?.type !== 'FFPROFANITY_SUBTITLES_DETECTED') return;
-  
+
   const { subtitles, source } = event.data;
   console.log(`[FFProfanity] Received ${subtitles.length} subtitles from ${source}`);
-  
+
+  const tracks: SubtitleTrack[] = [];
+
   for (const sub of subtitles) {
     if (!sub.url) continue;
-    
+
     const track: SubtitleTrack = {
       id: `intercepted-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       url: sub.url,
@@ -266,17 +341,13 @@ function handleInterceptedMessage(event: MessageEvent): void {
       source: source,
       recommendScore: 5,
     };
-    
-    // Add to detected tracks if not duplicate
-    if (!detectedTracks.some(t => t.url === track.url)) {
-      detectedTracks.push(track);
-      console.log(`[FFProfanity] Added track: ${track.label} (${track.url.substring(0, 50)}...)`);
-    }
+
+    tracks.push(track);
   }
-  
-  // Auto-select best track if no cues loaded
-  if (cues.length === 0 && detectedTracks.length > 0 && settings.autoSelectTrack) {
-    autoSelectBestTrack();
+
+  // Add all tracks at once (this also saves to storage)
+  if (tracks.length > 0) {
+    addDetectedTracks(tracks);
   }
 }
 
@@ -344,24 +415,26 @@ async function scanForTracks(): Promise<void> {
  */
 function addDetectedTracks(tracks: SubtitleTrack[]): void {
   // Filter out duplicates
-  const newTracks = tracks.filter(track => 
+  const newTracks = tracks.filter(track =>
     !detectedTracks.some(t => t.url === track.url || t.id === track.id)
   );
-  
+
   if (newTracks.length === 0) return;
-  
+
   detectedTracks.push(...newTracks);
-  
+
+  // Note: tracks are in-memory only - not persisted
+
   // If no current track, auto-select best one
   if (!currentTrack && detectedTracks.length > 0) {
     const selection = selectBestTrack(detectedTracks, settings);
-    
+
     if (selection.track && selection.autoSelected) {
       selectTrack(selection.track);
       showNotification('success', '', true);
     }
   }
-  
+
   // Notify popup of new tracks
   browser.runtime.sendMessage({
     type: 'tracksUpdated',
@@ -380,18 +453,17 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
     console.warn('Track has no URL and is not embedded');
     return;
   }
-  
+
   currentTrack = track;
-  
+
+  // Note: track selection is in-memory only - not persisted
+
   // If track has URL, fetch it
   if (track.url) {
     try {
       const response = await fetch(track.url);
       const content = await response.text();
-      await handleSubtitleUpload(content);
-      
-      // Save track selection
-      await storage.setSetting('currentTrackId', track.id);
+      await handleSubtitleUpload(content, track.label);
     } catch (error) {
       console.error('Failed to fetch subtitle track:', error);
       showNotification('error', 'Failed to load subtitles');
@@ -414,7 +486,7 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
           profanityMatches: [],
         };
       });
-      
+
       processCues(cues);
     }
   }
@@ -738,7 +810,8 @@ function handleMessage(message: unknown): Promise<unknown> {
   switch (msg.type) {
     case 'uploadCues':
       const content = msg.content as string;
-      handleSubtitleUpload(content);
+      const filename = msg.filename as string | undefined;
+      handleSubtitleUpload(content, filename);
       break;
 
     case 'updateOffset':
@@ -800,16 +873,36 @@ function handleMessage(message: unknown): Promise<unknown> {
 /**
  * Handle uploaded subtitle file
  */
-async function handleSubtitleUpload(content: string): Promise<void> {
+async function handleSubtitleUpload(content: string, filename?: string): Promise<void> {
   const result = parseSubtitle(content);
-  
+
   if (result.errors.length > 0) {
     console.error('Parse errors:', result.errors);
     return;
   }
-  
+
   processCues(result.cues);
-  await storage.setCues(cues);
+  // Note: cues are NOT saved to storage - per-session only
+
+  // Create a track entry for user uploads
+  const userTrack: SubtitleTrack = {
+    id: `user-upload-${Date.now()}`,
+    label: filename || 'Uploaded subtitles',
+    language: 'unknown',
+    isSDH: false,
+    isDefault: true,
+    source: 'user',
+    embedded: false,
+    recommendScore: 10, // User uploads should be preferred
+  };
+
+  // Set as current track (in-memory only)
+  if (!detectedTracks.some(t => t.id === userTrack.id)) {
+    detectedTracks.push(userTrack);
+  }
+  currentTrack = userTrack;
+
+  console.log(`[FFProfanity] Created track for uploaded file: ${userTrack.label}`);
 }
 
 /**

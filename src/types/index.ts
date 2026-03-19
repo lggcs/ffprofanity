@@ -72,6 +72,8 @@ export interface StorageSchema {
   cues: Cue[];
   settings: Settings;
   presets: Record<string, Partial<Settings>>;
+  detectedTracks?: SubtitleTrack[];
+  currentTrack?: SubtitleTrack | null;
 }
 
 // Message types for communication between content script and background

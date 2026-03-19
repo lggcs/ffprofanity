@@ -3,7 +3,7 @@
  * Manages persistent storage for cues, settings, and presets
  */
 
-import type { Cue, Settings, StorageSchema } from '../types';
+import type { Cue, Settings, StorageSchema, SubtitleTrack } from '../types';
 
 const CURRENT_SCHEMA_VERSION = 1;
 
@@ -20,7 +20,7 @@ const DEFAULT_SETTINGS: Settings = {
   autoSelectTrack: true,
 };
 
-type StorageKey = 'cues_v1' | 'settings' | 'presets';
+type StorageKey = 'cues_v1' | 'settings' | 'presets' | 'detectedTracks' | 'currentTrack';
 
 export class StorageManager {
   /**
@@ -30,21 +30,51 @@ export class StorageManager {
     const result = await browser.storage.local.get('cues_v1');
     return result.cues_v1 || [];
   }
-  
+
   /**
    * Save cues to storage
    */
   async setCues(cues: Cue[]): Promise<void> {
     await browser.storage.local.set({ cues_v1: cues });
   }
-  
+
   /**
    * Clear all cues
    */
   async clearCues(): Promise<void> {
     await browser.storage.local.remove('cues_v1');
   }
-  
+
+  /**
+   * Get detected tracks from storage
+   */
+  async getDetectedTracks(): Promise<SubtitleTrack[]> {
+    const result = await browser.storage.local.get('detectedTracks');
+    return result.detectedTracks || [];
+  }
+
+  /**
+   * Save detected tracks to storage
+   */
+  async setDetectedTracks(tracks: SubtitleTrack[]): Promise<void> {
+    await browser.storage.local.set({ detectedTracks: tracks });
+  }
+
+  /**
+   * Get current track from storage
+   */
+  async getCurrentTrack(): Promise<SubtitleTrack | null> {
+    const result = await browser.storage.local.get('currentTrack');
+    return result.currentTrack || null;
+  }
+
+  /**
+   * Save current track to storage
+   */
+  async setCurrentTrack(track: SubtitleTrack | null): Promise<void> {
+    await browser.storage.local.set({ currentTrack: track });
+  }
+
   /**
    * Get settings from storage
    */
@@ -52,7 +82,7 @@ export class StorageManager {
     const result = await browser.storage.local.get('settings');
     return { ...DEFAULT_SETTINGS, ...(result.settings || {}) };
   }
-  
+
   /**
    * Save settings to storage
    */
@@ -60,7 +90,7 @@ export class StorageManager {
     const current = await this.getSettings();
     await browser.storage.local.set({ settings: { ...current, ...settings } });
   }
-  
+
   /**
    * Get setting with key
    */
@@ -68,7 +98,7 @@ export class StorageManager {
     const settings = await this.getSettings();
     return settings[key];
   }
-  
+
   /**
    * Set single setting
    */
@@ -77,7 +107,7 @@ export class StorageManager {
     settings[key] = value;
     await browser.storage.local.set({ settings });
   }
-  
+
   /**
    * Get site-specific preset
    */
@@ -86,7 +116,7 @@ export class StorageManager {
     const presets = result.presets || {};
     return presets[site] || null;
   }
-  
+
   /**
    * Save site-specific preset
    */
@@ -96,32 +126,36 @@ export class StorageManager {
     presets[site] = preset;
     await browser.storage.local.set({ presets });
   }
-  
+
   /**
    * Clear all storage data
    */
   async clearAll(): Promise<void> {
     await browser.storage.local.clear();
   }
-  
+
   /**
    * Export all data for backup
    */
   async exportData(): Promise<StorageSchema> {
-    const [cues, settings, presetsResult] = await Promise.all([
+    const [cues, settings, presetsResult, detectedTracks, currentTrack] = await Promise.all([
       this.getCues(),
       this.getSettings(),
       browser.storage.local.get('presets'),
+      this.getDetectedTracks(),
+      this.getCurrentTrack(),
     ]);
-    
+
     return {
       version: CURRENT_SCHEMA_VERSION,
       cues,
       settings,
       presets: presetsResult.presets || {},
+      detectedTracks,
+      currentTrack,
     };
   }
-  
+
   /**
    * Import data from backup
    */
@@ -129,11 +163,13 @@ export class StorageManager {
     if (data.version !== CURRENT_SCHEMA_VERSION) {
       console.warn('Storage schema version mismatch, data may need migration');
     }
-    
+
     await Promise.all([
       this.setCues(data.cues || []),
       this.setSettings(data.settings || {}),
       browser.storage.local.set({ presets: data.presets || {} }),
+      this.setDetectedTracks(data.detectedTracks || []),
+      this.setCurrentTrack(data.currentTrack || null),
     ]);
   }
 }
