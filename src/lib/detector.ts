@@ -338,12 +338,16 @@ export class ProfanityDetector {
 
 // Create default detector instance
 export function createDetector(config?: Partial<ProfanityConfig>): ProfanityDetector {
+  // Don't spread wordlist if it's empty or undefined (use defaults)
+  const { wordlist: configWordlist, ...restConfig } = config || {} as Partial<ProfanityConfig>;
+  
   return new ProfanityDetector({
     wordlist: DEFAULT_WORDLIST,
     fuzzyThreshold: 0.20,
     sensitivity: 'medium',
     useFuzzyMatching: false,
     useContextFiltering: true,
-    ...config,
+    ...restConfig,
+    ...(configWordlist && configWordlist.length > 0 ? { wordlist: configWordlist } : {}),
   });
 }

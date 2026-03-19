@@ -17,6 +17,21 @@
     <div class="status-text" id="statusText">Checking...</div>
   </div>
 
+  <div class="track-section hidden" id="trackSection">
+    <div class="track-label">Current Track</div>
+    <div class="track-current" id="currentTrack">
+      <span id="currentTrackName">None selected</span>
+      <button id="changeTrackBtn" class="secondary small">Change</button>
+    </div>
+    <div class="track-list hidden" id="trackList">
+      <div id="trackOptions"></div>
+      <div class="track-upload">
+        <input type="file" id="subtitleFile" accept=".srt,.vtt,.ass,.ssa">
+        <label for="subtitleFile" class="secondary small">Upload subtitle file...</label>
+      </div>
+    </div>
+  </div>
+
   <div class="current-cue hidden" id="currentCue">
     <div class="current-cue-label">Current Cue</div>
     <div class="current-cue-text" id="cueText"></div>

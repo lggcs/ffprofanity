@@ -15,6 +15,9 @@ const DEFAULT_SETTINGS: Settings = {
   enabledSites: [],
   optInTFJS: false,
   optInAutoFetch: false,
+  preferredLanguage: 'en',
+  preferSDH: true,
+  autoSelectTrack: true,
 };
 
 type StorageKey = 'cues_v1' | 'settings' | 'presets';

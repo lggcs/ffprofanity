@@ -237,3 +237,102 @@ button.secondary:hover {
 .footer a:hover {
   text-decoration: underline;
 }
+
+/* Track Selection Section */
+.track-section {
+  padding: 12px 16px;
+  background: var(--card-bg);
+  border-top: 1px solid var(--border-color);
+}
+
+.track-section.hidden {
+  display: none;
+}
+
+.track-label {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.track-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.track-current span {
+  font-size: 13px;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.track-current .small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.track-list {
+  margin-top: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.track-list.hidden {
+  display: none;
+}
+
+.track-item {
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+}
+
+.track-item:last-child {
+  border-bottom: none;
+}
+
+.track-item:hover {
+  background: #f5f5f5;
+}
+
+.track-item.selected {
+  background: rgba(74, 20, 140, 0.1);
+  color: var(--primary-color);
+}
+
+.track-item.sdh::after {
+  content: " ★";
+  color: var(--warning-color);
+}
+
+.track-upload {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.track-upload input[type="file"] {
+  display: none;
+}
+
+.track-upload label {
+  display: block;
+  text-align: center;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  background: #f5f5f5;
+  transition: background 0.2s;
+}
+
+.track-upload label:hover {
+  background: #e8e8e8;
+}

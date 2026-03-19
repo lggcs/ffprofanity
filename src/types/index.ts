@@ -23,6 +23,35 @@ export interface ProfanityMatch {
   confidence: number;
 }
 
+// Subtitle track detected from streaming site or video element
+export interface SubtitleTrack {
+  id: string;
+  label: string;           // Display name: "English SDH", "Spanish", etc.
+  language: string;        // ISO code: "en", "es", "en-US", etc.
+  isSDH: boolean;           // Is this a closed-caption/SDH track?
+  isDefault: boolean;       // Is this the default track?
+  url?: string;             // External URL if available
+  embedded?: boolean;       // Is it embedded in video element?
+  source: 'video' | 'network' | 'user';  // Where was this track detected?
+  recommendScore: number;  // Selection priority score (calculated)
+}
+
+// Track selection result
+export interface TrackSelection {
+  track: SubtitleTrack | null;
+  alternatives: SubtitleTrack[];
+  autoSelected: boolean;
+}
+
+// Detected subtitle file from network
+export interface NetworkSubtitle {
+  url: string;
+  format: 'srt' | 'vtt' | 'ass' | 'unknown';
+  language?: string;
+  label?: string;
+  timestamp: number;
+}
+
 // Settings stored in browser storage
 export interface Settings {
   offsetMs: number;
@@ -32,6 +61,9 @@ export interface Settings {
   enabledSites: string[];
   optInTFJS: boolean;
   optInAutoFetch: boolean;
+  preferredLanguage: string;  // User's preferred subtitle language
+  preferSDH: boolean;          // Prefer SDH/CC tracks
+  autoSelectTrack: boolean;    // Auto-select best detected track
 }
 
 // Storage schema version

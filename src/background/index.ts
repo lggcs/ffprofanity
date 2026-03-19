@@ -1,9 +1,10 @@
 /**
  * Background Service Worker
- * Handles mute/unmute operations and message routing
+ * Handles mute/unmute operations, message routing, and subtitle detection
  */
 
-import type { MuteNowMessage, UnmuteNowMessage, CuesMessage, Settings } from './types';
+import type { MuteNowMessage, UnmuteNowMessage, CuesMessage, Settings, SubtitleTrack } from '../types';
+import { isSubtitleUrl, detectSubtitleFormat } from '../lib/extractor';
 
 // Active mute states per tab
 const muteStates = new Map<number, {
@@ -12,6 +13,9 @@ const muteStates = new Map<number, {
   expectedUnmuteAt: number | null;
   safetyTimer: ReturnType<typeof setTimeout> | null;
 }>();
+
+// Detected subtitle URLs per tab
+const detectedSubtitles = new Map<number, SubtitleTrack[]>();
 
 // Pending cues and settings cache
 const cuesCache = new Map<number, {
@@ -96,26 +100,26 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
  */
 browser.runtime.onMessage.addListener((message: unknown, sender) => {
   if (!message || typeof message !== 'object') return;
-  
+
   const msg = message as Record<string, unknown>;
   const tabId = sender.tab?.id;
-  
+
   if (!tabId) return;
-  
+
   console.log(`Received message from tab ${tabId}:`, msg.type);
-  
+
   switch (msg.type) {
     case 'muteNow': {
       const muteMsg = message as MuteNowMessage;
       muteTab(tabId, muteMsg.reasonId, muteMsg.expectedUnmuteAt);
       break;
     }
-    
+
     case 'unmuteNow': {
       unmuteTab(tabId, 'unmute-request');
       break;
     }
-    
+
     case 'getStatus': {
       const state = muteStates.get(tabId);
       return Promise.resolve({
@@ -124,8 +128,85 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
         tabId,
       });
     }
+
+    case 'getDetectedTracks': {
+      const tracks = detectedSubtitles.get(tabId) || [];
+      return Promise.resolve({
+        type: 'detectedTracks',
+        tracks,
+        tabId,
+      });
+    }
+
+    case 'clearDetectedTracks': {
+      detectedSubtitles.delete(tabId);
+      return Promise.resolve({ success: true });
+    }
   }
 });
+
+/**
+ * Intercept network requests to detect subtitle files
+ */
+browser.webRequest.onCompleted.addListener(
+  (details) => {
+    const url = details.url;
+    
+    // Check if this looks like a subtitle file
+    if (!isSubtitleUrl(url)) return;
+    
+    const tabId = details.tabId;
+    if (tabId < 0) return; // Not a valid tab
+    
+    // Get content type from response headers
+    const contentType = details.responseHeaders?.find(
+      h => h.name.toLowerCase() === 'content-type'
+    )?.value;
+    
+    const format = detectSubtitleFormat(url, contentType);
+    
+    // Extract language from URL or filename
+    const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
+    const language = langMatch ? langMatch[1].toLowerCase() : undefined;
+    
+    // Extract label from filename
+    const filenameMatch = url.match(/\/([^\/]+)\.(?:vtt|srt|ass|ssa)$/i);
+    const label = filenameMatch 
+      ? filenameMatch[1].replace(/[_\-\+]/g, ' ') 
+      : `Subtitle (${format.toUpperCase()})`;
+    
+    const track: SubtitleTrack = {
+      id: `network-${tabId}-${Date.now()}`,
+      label,
+      language: language || '',
+      isSDH: /sdh|cc|hearing|deaf/i.test(label),
+      isDefault: false,
+      url,
+      embedded: false,
+      source: 'network',
+      recommendScore: 0,
+    };
+    
+    // Add to detected subtitles for this tab
+    const existing = detectedSubtitles.get(tabId) || [];
+    
+    // Avoid duplicates
+    if (!existing.some(t => t.url === track.url)) {
+      detectedSubtitles.set(tabId, [...existing, track]);
+      console.log(`Detected subtitle: ${label} (${url})`);
+      
+      // Notify content script of new track
+      browser.tabs.sendMessage(tabId, {
+        type: 'trackDetected',
+        track,
+      }).catch(() => {
+        // Content script may not be ready, ignore
+      });
+    }
+  },
+  { urls: ['<all_urls>'] },
+  ['responseHeaders']
+);
 
 /**
  * Handle tab removal - cleanup state
@@ -133,6 +214,17 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
 browser.tabs.onRemoved.addListener((tabId) => {
   muteStates.delete(tabId);
   cuesCache.delete(tabId);
+  detectedSubtitles.delete(tabId);
+});
+
+/**
+ * Handle tab updates - clear detected subtitles on navigation
+ */
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    // Clear detected subtitles when navigating to a new page
+    detectedSubtitles.delete(tabId);
+  }
 });
 
 // Initialize extension

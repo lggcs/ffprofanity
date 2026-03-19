@@ -84,7 +84,7 @@ describe('ProfanityDetector', () => {
 
   describe('detect', () => {
     const detector = new ProfanityDetector({
-      wordlist: ['fuck', 'shit', 'ass', 'bitch'],
+      wordlist: ['fuck', 'shit', 'ass', 'bitch', 'bullshit'],
       fuzzyThreshold: 0.25,
       sensitivity: 'medium',
       useFuzzyMatching: true,
@@ -132,6 +132,24 @@ describe('ProfanityDetector', () => {
       const result = detector.detect('');
       expect(result.hasProfanity).toBe(false);
       expect(result.matches).toHaveLength(0);
+    });
+
+    it('should detect bullshit', () => {
+      const result = detector.detect("Lately, we're putting out more bullshit than air freshener.");
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).toContain('[CENSORED]');
+    });
+
+    it('should detect bullshit (uppercase)', () => {
+      const result = detector.detect('This is BULLSHIT!');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).toContain('[CENSORED]');
+    });
+
+    it('should detect bullshit (standalone)', () => {
+      const result = detector.detect('bullshit');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).toBe('[CENSORED]');
     });
   });
 
