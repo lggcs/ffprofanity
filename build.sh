@@ -36,6 +36,7 @@ cp public/manifest.json dist/
 cp src/options/options.html dist/
 cp src/popup/popup.html dist/
 cp src/options/privacy.html dist/
+cp src/options/user-guide.html dist/
 cp src/styles/options.css dist/styles/
 cp src/styles/popup.css dist/styles/
 

@@ -1,0 +1,226 @@
+# User Guide
+
+## Profanity Filter WebExtension
+
+### Installation
+
+#### From Source (Development)
+1. Clone or download this repository
+2. Run `npm install` to install dependencies
+3. Run `npm run build` to build the extension
+4. Open Firefox and navigate to `about:debugging`
+5. Click "This Firefox" in the left sidebar
+6. Click "Load Temporary Add-on"
+7. Select the `manifest.json` file from the `dist/` folder
+
+#### From Firefox Add-ons (Coming Soon)
+Once published, you'll be able to install directly from addons.mozilla.org
+
+---
+
+## Basic Usage
+
+### 1. Upload a Subtitle File
+
+1. Click the extension icon in the Firefox toolbar
+2. Click "Options" to open the settings page
+3. In the "Subtitle File" section, click "Choose subtitle file"
+4. Select an SRT, ASS/SSA, or WEBVTT file
+5. The extension will automatically process the file and display the number of cues loaded
+
+### 2. Adjust Timing (if needed)
+
+If subtitles are out of sync with the video:
+
+- Use the **Offset slider** in Options to shift timing
+- Use **keyboard shortcuts** during playback:
+  - `Alt+←` - Move subtitles earlier (by 500ms)
+  - `Alt+→` - Move subtitles later (by 500ms)
+
+### 3. Enable/Disable the Extension
+
+- Click the extension icon to open the popup
+- Use the **Enable/Disable** toggle button
+- The status indicator shows:
+  - 🟢 Green: Active and monitoring
+  - 🔴 Gray: Disabled
+  - 🟡 Yellow: No video detected
+
+---
+
+## Settings
+
+### Detection Sensitivity
+
+Choose how aggressively the extension detects profanity:
+
+| Level | Description |
+|-------|-------------|
+| Low | Only detects obvious profanity, fewer false positives |
+| Medium | Balanced detection (recommended) |
+| High | Aggressive detection, may have more false positives |
+
+### Custom Wordlist
+
+Add or remove words from the detection list:
+
+1. Go to Options > "Custom Wordlist"
+2. Enter words one per line
+3. Use `+` prefix to add words: `badword`
+4. Use `-` prefix to exclude words: `-okayword`
+5. Click "Save Wordlist"
+
+### Timing Offset
+
+Adjust the subtitle timing offset:
+
+- **Positive offset**: Subtitles appear later (video is ahead)
+- **Negative offset**: Subtitles appear earlier (video is behind)
+- Range: -10,000ms to +10,000ms (±10 seconds)
+- Step: 100ms
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Alt+←` | Decrease offset (subtitles earlier) |
+| `Alt+→` | Increase offset (subtitles later) |
+
+To customize shortcuts:
+1. Go to `about:addons`
+2. Click the gear icon > "Manage Extension Shortcuts"
+3. Assign your preferred key combinations
+
+---
+
+## Supported Formats
+
+### Subtitle Formats
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| SubRip | .srt | Most common format |
+| WebVTT | .vtt | HTML5 native format |
+| ASS/SSA | .ass, .ssa | Advanced styling not preserved |
+
+### File Limitations
+
+- Maximum tested: 10,000 cues
+- Encoding: UTF-8 recommended
+- Large files (>1MB) may take a few seconds to process
+
+---
+
+## Troubleshooting
+
+### Subtitles not appearing
+
+1. **Check if extension is enabled** in the popup
+2. **Verify video element exists** - the status should show "Active"
+3. **Try refreshing the page**
+4. **Check if subtitles were loaded** - Options should show "X cues loaded"
+
+### Timing is off
+
+1. Use the offset slider in Options
+2. Use `Alt+←` or `Alt+→` during playback
+3. **Note**: Some streaming services may have variable timing
+
+### Not muting audio
+
+1. The extension mutes the **tab**, not the video element
+2. Ensure the tab has focus
+3. Check browser permissions
+
+### Profanity not detected
+
+1. Try increasing sensitivity
+2. Add the specific word to the custom wordlist
+3. Some obfuscated spellings may not be caught
+
+---
+
+## Privacy
+
+This extension:
+
+- ✅ Processes all data locally in your browser
+- ✅ Does NOT send any data to external servers
+- ✅ Does NOT use cookies or tracking
+- ✅ Does NOT require an account
+- ✅ Works completely offline
+
+For details, see the [Privacy Policy](privacy.html).
+
+---
+
+## Advanced Features
+
+### Export/Import Settings
+
+Backup and restore your configuration:
+
+1. Go to Options
+2. Click "Export Settings" to download a JSON file
+3. Click "Import Settings" to load from a backup file
+
+### Per-Site Presets (Coming Soon)
+
+The extension will support custom settings for specific websites.
+
+---
+
+## Limitations
+
+- **DRM-protected videos** (Netflix, some streaming services) may not work
+- **Dynamic video players** may require page refresh after subtitle load
+- **Embedded videos** in iframes may need direct navigation
+- **Subtitle styling** from ASS/SSA files is not preserved
+
+---
+
+## Support
+
+### Reporting Issues
+
+1. Go to [GitHub Issues](https://github.com/ffprofanity/ffprofanity/issues)
+2. Click "New Issue"
+3. Include:
+   - Browser version
+   - Extension version
+   - Steps to reproduce
+   - Console errors (if any)
+
+### Getting Console Logs
+
+1. Press `F12` to open Developer Tools
+2. Go to "Console" tab
+3. Look for messages from "Profanity Filter"
+4. Right-click > "Save as" to export logs
+
+---
+
+## FAQ
+
+**Q: Does this work on YouTube?**
+A: Yes, it works on YouTube and most HTML5 video players.
+
+**Q: Can I use this with Netflix?**
+A: Limited. DRM protection may prevent subtitle overlay.
+
+**Q: Will this slow down my browser?**
+A: No. Processing is optimized and runs only when video is playing.
+
+**Q: Can I use my own subtitle files?**
+A: Yes! That's the primary use case. Load any SRT/VTT/ASS file.
+
+**Q: Is there a mobile version?**
+A: Firefox for Android supports extensions. This should work, but is not tested.
+
+---
+
+## Development
+
+Interested in contributing? See the [README](README.md) for development setup.
