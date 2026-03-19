@@ -71,12 +71,26 @@ function parseASSTimestamp(timestamp: string): number {
  * Determine subtitle format from content
  */
 export function detectFormat(content: string): 'srt' | 'ass' | 'vtt' | null {
-  const trimmed = content.trim();
-  
-  if (trimmed.startsWith('WEBVTT')) return 'vtt';
+  // Remove BOM and trim whitespace
+  const trimmed = content.replace(/^\uFEFF/, '').trim();
+
+  // WEBVTT can have optional headers after WEBVTT, e.g., "WEBVTT\nX-TIMESTAMP-MAP..."
+  // Also check for YouTube's format which may have "WEBVTT" at start
+  if (/^WEBVTT(?:\s|$|\n)/i.test(trimmed)) return 'vtt';
+
+  // ASS/SSA format
   if (trimmed.match(/^\[Script Info\]/i) || trimmed.match(/^[Ss][Ss][Aa]/)) return 'ass';
+
+  // SRT format: cue number followed by timestamp
   if (trimmed.match(/^\d+\s*\r?\n\d{2}:\d{2}:\d{2}[,\.]\d{3}/)) return 'srt';
-  
+
+  // Fallback: Try to detect by timestamp patterns (YouTube VTT often has timestamps immediately)
+  // VTT timestamps use . separator for fractional seconds
+  if (trimmed.match(/\d{2}:\d{2}:\d{2}\.\d{3}\s*-->/)) return 'vtt';
+
+  // SRT timestamps use , separator
+  if (trimmed.match(/\d{2}:\d{2}:\d{2},\d{3}\s*-->/)) return 'srt';
+
   return null;
 }
 

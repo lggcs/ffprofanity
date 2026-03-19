@@ -9,6 +9,7 @@ import { ProfanityDetector, createDetector } from '../lib/detector';
 import { CueIndex } from '../lib/cueIndex';
 import { selectBestTrack, formatTrackLabel, createTrackFromUser } from '../lib/tracks';
 import { scanPageForTracks, extractFromPageScripts, watchForVideoTracks } from '../lib/extractor';
+import { getAllMatchingExtractors, extractLanguageFromUrl, isSubtitleUrl } from '../extractors';
 import type { Cue, Settings, DetectionResult, SubtitleTrack } from '../types';
 
 // State
@@ -102,15 +103,92 @@ async function init(): Promise<void> {
  * This captures subtitle URLs from JSON API responses
  */
 function injectApiInterceptor(): void {
+  // Get site-specific injected scripts
+  const currentUrl = window.location.href;
+  const matchingExtractors = getAllMatchingExtractors(currentUrl);
+  const siteScripts = matchingExtractors
+    .map(e => (e as any).getInjectedScript?.() || '')
+    .filter((s: string) => s.length > 0)
+    .join('\n\n');
+
   const script = document.createElement('script');
   script.textContent = `
     (function() {
       console.log('[FFProfanity] API interceptor injected');
-      
+
+      // Site-specific extractors
+      ${siteScripts}
+
+      // Generic helper: Recursively find subtitle URLs in any object
+      function findSubtitlesRecursive(obj) {
+        const subs = [];
+        if (!obj || typeof obj !== 'object') return subs;
+
+        // Check if this object looks like a subtitle entry
+        if (obj.file && typeof obj.file === 'string' &&
+            (obj.file.includes('.vtt') || obj.file.includes('.srt') || obj.file.includes('.ass'))) {
+          subs.push({
+            url: obj.file,
+            language: obj.language || obj.lang || obj.code || 'unknown',
+            label: obj.label || obj.name || obj.language || 'Detected'
+          });
+        }
+        if (obj.url && typeof obj.url === 'string' &&
+            (obj.url.includes('.vtt') || obj.url.includes('.srt') || obj.url.includes('.ass'))) {
+          subs.push({
+            url: obj.url,
+            language: obj.language || obj.lang || obj.code || 'unknown',
+            label: obj.label || obj.name || obj.language || 'Detected'
+          });
+        }
+
+        // Recursively search arrays
+        if (Array.isArray(obj)) {
+          for (const item of obj) {
+            subs.push(...findSubtitlesRecursive(item));
+          }
+        } else {
+          // Search object properties, prioritizing subtitle-related keys
+          const priorityKeys = ['subtitles', 'subs', 'captions', 'cc', 'text_tracks', 'tracks'];
+          for (const key of priorityKeys) {
+            if (obj[key]) {
+              subs.push(...findSubtitlesRecursive(obj[key]));
+            }
+          }
+        }
+
+        return subs;
+      }
+
+      // Generic helper: Extract language from URL
+      function extractLanguageFromUrl(url) {
+        const patterns = [
+          /[?&]lang=([a-z]{2,3})/i,
+          /\\/([a-z]{2,3})_[a-f0-9]+\\.vtt$/i,
+          /\\/([a-z]{2,3})\\/[^/]+\\.vtt$/i,
+          /[_\\-\\.]([a-z]{2,3})\\.(vtt|srt|ass)$/i
+        ];
+        for (const pattern of patterns) {
+          const match = url.match(pattern);
+          if (match) return match[1].toLowerCase();
+        }
+        return 'unknown';
+      }
+
+      // Generic helper: Language code to name
+      function getLanguageName(code) {
+        const names = {
+          en: 'English', es: 'Spanish', fr: 'French', de: 'German',
+          it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese',
+          ko: 'Korean', zh: 'Chinese', ar: 'Arabic', hi: 'Hindi'
+        };
+        return names[code.toLowerCase()] || code.toUpperCase();
+      }
+
       // Intercept XMLHttpRequest
       const originalXHROpen = XMLHttpRequest.prototype.open;
       const originalXHRSend = XMLHttpRequest.prototype.send;
-      
+
       XMLHttpRequest.prototype.open = function(method, url) {
         this._ffprofanity_url = url;
         return originalXHROpen.apply(this, arguments);
@@ -119,211 +197,147 @@ function injectApiInterceptor(): void {
       XMLHttpRequest.prototype.send = function() {
         const xhr = this;
 
-        // Check if this is a subtitle API call
         xhr.addEventListener('load', function() {
           const url = xhr._ffprofanity_url || '';
 
-          // Only try to read responseText for text responses
-          // responseType is '' or 'text' for text responses
-          // responseType is 'arraybuffer', 'blob', 'json', 'document' for binary/other
           if (xhr.responseType !== '' && xhr.responseType !== 'text') {
-            return; // Skip binary responses (video segments, etc.)
+            return; // Skip binary responses
           }
 
           try {
             const responseText = xhr.responseText || '';
 
-            // LookMovie API endpoints
-            if (url.includes('/api/v1/security/movie-access') || url.includes('/api/v2/download')) {
-              try {
-                const data = JSON.parse(responseText);
-                if (data.subtitles && Array.isArray(data.subtitles)) {
-                  console.log('[FFProfanity] Intercepted LookMovie subtitles:', data.subtitles.length);
-                  window.postMessage({
-                    type: 'FFPROFANITY_SUBTITLES_DETECTED',
-                    source: 'lookmovie-api',
-                    subtitles: data.subtitles.map(s => ({
-                      url: s.file || s.url || s.downloadLink,
-                      language: s.language || s.lang || 'unknown',
-                      label: s.label || s.language || 'Unknown'
-                    }))
-                  }, '*');
-                }
-              } catch (e) {
-                // Not JSON, ignore
-              }
-            }
-
-            // Also check for subtitle file requests
-            if (url.match(/\\.vtt|\\.srt|\\.ass/i) && !url.includes('blob:')) {
+            // Direct subtitle file URLs
+            if (/\\.(vtt|srt|ass|ssa)/i.test(url) && !url.includes('blob:')) {
               console.log('[FFProfanity] Intercepted subtitle URL:', url);
-              
-              // Try to extract language from URL
-              let language = 'unknown';
-              let label = 'Detected subtitle';
-              
-              // Common patterns: en_subtitle.vtt, subtitle.en.vtt, /en/xxx.vtt, lang=en
-              const langPatterns = [
-                /[?&]lang=([a-z]{2,3})/i,
-                /\/([a-z]{2,3})\/[^/]+\.vtt$/i,
-                /\/([a-z]{2,3})_[a-f0-9]+\.vtt$/i, // LookMovie: en_hash.vtt
-                /\.([a-z]{2,3})\.vtt$/i,
-                /_([a-z]{2,3})\.vtt$/i,
-              ];
-              
-              for (const pattern of langPatterns) {
-                const match = url.match(pattern);
-                if (match) {
-                  language = match[1].toLowerCase();
-                  // Convert common codes to display names
-                  const langNames = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian', pt: 'Portuguese', ru: 'Russian', ja: 'Japanese', ko: 'Korean', zh: 'Chinese' };
-                  label = langNames[language] || language.toUpperCase();
-                  break;
-                }
-              }
-              
+              const lang = extractLanguageFromUrl(url);
               window.postMessage({
                 type: 'FFPROFANITY_SUBTITLES_DETECTED',
                 source: 'xhr',
-                subtitles: [{
-                  url: url,
-                  language: language,
-                  label: label
-                }]
+                subtitles: [{ url: url, language: lang, label: getLanguageName(lang) }]
               }, '*');
             }
-          } catch (e) {
-            // Error reading response, ignore
-          }
+
+            // JSON responses - search recursively for subtitles
+            if (responseText.trim().startsWith('{') || responseText.trim().startsWith('[')) {
+              try {
+                const data = JSON.parse(responseText);
+                const subs = findSubtitlesRecursive(data);
+                if (subs.length > 0) {
+                  console.log('[FFProfanity] Found ' + subs.length + ' subtitles in JSON response:', url.substring(0, 100));
+                  window.postMessage({
+                    type: 'FFPROFANITY_SUBTITLES_DETECTED',
+                    source: 'json-recursive',
+                    subtitles: subs
+                  }, '*');
+                }
+              } catch (e) { /* Not valid JSON */ }
+            }
+          } catch (e) { /* Error reading response */ }
         });
 
         return originalXHRSend.apply(this, arguments);
       };
-      
+
       // Intercept fetch
       const originalFetch = window.fetch;
       window.fetch = function(input, init) {
-        const url = typeof input === 'string' ? input : input.url;
-        
+        const url = typeof input === 'string' ? input : (input.url || '');
+
         return originalFetch.apply(this, arguments).then(response => {
-          // Clone response so we can read it
           const clone = response.clone();
-          
-          // Check for subtitle API responses
-          if (url && (url.includes('/api/v1/security/movie-access') || url.includes('/api/v2/download'))) {
+
+          // Direct subtitle URLs
+          if (/\\.(vtt|srt|ass|ssa)/i.test(url)) {
+            console.log('[FFProfanity] Intercepted fetch subtitle URL:', url);
+            const lang = extractLanguageFromUrl(url);
+            window.postMessage({
+              type: 'FFPROFANITY_SUBTITLES_DETECTED',
+              source: 'fetch',
+              subtitles: [{ url: url, language: lang, label: getLanguageName(lang) }]
+            }, '*');
+          }
+
+          // JSON responses
+          if (url && (url.includes('timedtext') || url.includes('caption') || url.includes('subtitle') || url.includes('/api/'))) {
             clone.text().then(text => {
               try {
                 const data = JSON.parse(text);
-                if (data.subtitles && Array.isArray(data.subtitles)) {
-                  console.log('[FFProfanity] Intercepted fetch subtitles:', data.subtitles.length);
+                const subs = findSubtitlesRecursive(data);
+                if (subs.length > 0) {
                   window.postMessage({
                     type: 'FFPROFANITY_SUBTITLES_DETECTED',
-                    source: 'lookmovie-api',
-                    subtitles: data.subtitles.map(s => ({
-                      url: s.file || s.url || s.downloadLink,
-                      language: s.language || s.lang || 'unknown',
-                      label: s.label || s.language || 'Unknown'
-                    }))
+                    source: 'fetch-json',
+                    subtitles: subs
                   }, '*');
                 }
-              } catch (e) {
-                // Not JSON, ignore
-              }
+              } catch (e) { /* Not JSON */ }
             });
           }
-          
+
           return response;
         });
       };
-      
-      // Also check Vue/store data on page load
-      window.addEventListener('load', function() {
-        // Some sites store subtitle URLs in Vue/React state
-        const checkForData = () => {
-          // Check for common state patterns in window
-          if (window.movie_storage) {
-            console.log('[FFProfanity] Found movie_storage');
-            const storage = window.movie_storage;
-            
-            // Log the structure for debugging
-            console.log('[FFProfanity] movie_storage keys:', Object.keys(storage));
-            console.log('[FFProfanity] movie_storage sample:', JSON.stringify(storage).substring(0, 2000));
-            
-            // Try to find subtitles in various properties
-            const subtitleProps = ['subtitles', 'subs', 'captions', 'cc', 'tracks'];
-            for (const prop of subtitleProps) {
-              if (storage[prop]) {
-                console.log('[FFProfanity] Found ' + prop + ' in movie_storage:', storage[prop]);
-                extractAndSendSubtitles(storage[prop], 'movie_storage.' + prop);
-              }
-            }
-            
-            // Check for nested structures
-            if (storage.data && storage.data.subtitles) {
-              console.log('[FFProfanity] Found data.subtitles:', storage.data.subtitles);
-              extractAndSendSubtitles(storage.data.subtitles, 'movie_storage.data.subtitles');
-            }
-            
-            if (storage.streams) {
-              // Some sites put subtitles under streams
-              for (const stream of storage.streams) {
-                if (stream.subtitles) {
-                  console.log('[FFProfanity] Found subtitles in stream:', stream.subtitles);
-                  extractAndSendSubtitles(stream.subtitles, 'movie_storage.streams.subtitles');
-                }
-              }
-            }
-          }
-        };
-        
-        // Helper to extract and send subtitles
-        function extractAndSendSubtitles(subs, source) {
-          if (!Array.isArray(subs)) {
-            console.log('[FFProfanity] Subtitles not an array:', subs);
-            return;
-          }
-          
-          const subtitles = subs.map(sub => ({
-            url: sub.file || sub.url || sub.downloadLink || sub.src,
-            language: sub.language || sub.lang || sub.code || 'unknown',
-            label: sub.label || sub.name || sub.language || 'Unknown'
-          })).filter(s => s.url);
-          
-          if (subtitles.length > 0) {
-            console.log('[FFProfanity] Sending ' + subtitles.length + ' subtitles from ' + source);
-            window.postMessage({
-              type: 'FFPROFANITY_SUBTITLES_DETECTED',
-              source: source,
-              subtitles: subtitles
-            }, '*');
+
+      // Watch for CC button clicks (generic)
+      document.addEventListener('click', function(e) {
+        const ccSelectors = [
+          '[class*="cc"]', '[class*="caption"]', '[class*="subtitle"]',
+          '[aria-label*="subtitle"]', '[aria-label*="caption"]', '[aria-label*="cc"]',
+          '.ytp-subtitles-button', '.cc-button'
+        ];
+        const target = e.target;
+        for (const sel of ccSelectors) {
+          if (target.matches && (target.matches(sel) || target.closest?.(sel))) {
+            console.log('[FFProfanity] CC button clicked');
+            // Site-specific handlers will check after click
+            break;
           }
         }
-
-        // Check immediately and after delays
-        checkForData();
-        setTimeout(checkForData, 1000);
-        setTimeout(checkForData, 3000);
-        setTimeout(checkForData, 5000);
-      });
+      }, true);
     })();
   `;
-  
+
   (document.head || document.documentElement).appendChild(script);
   script.remove();
-  
+
   // Listen for messages from the injected script
   window.addEventListener('message', handleInterceptedMessage);
 }
 
 /**
  * Handle intercepted subtitle data from injected script
+ * Handles two message types:
+ * - FFPROFANITY_SUBTITLES_DETECTED: Track metadata (URL, language, label)
+ * - FFPROFANITY_SUBTITLE_CONTENT: Actual subtitle content fetched in page context
  */
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
+
+  // Handle subtitle content (fetched in page context with cookies)
+  if (event.data?.type === 'FFPROFANITY_SUBTITLE_CONTENT') {
+    const { content, language, label, source } = event.data;
+    console.log(`[FFProfanity] Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`);
+
+    if (content && content.length > 10) {
+      // Parse and use directly
+      handleSubtitleContent(content, language, label, source);
+    }
+    return;
+  }
+
+  // Handle track metadata
   if (event.data?.type !== 'FFPROFANITY_SUBTITLES_DETECTED') return;
 
   const { subtitles, source } = event.data;
   console.log(`[FFProfanity] Received ${subtitles.length} subtitles from ${source}`);
+
+  // Log each subtitle URL for debugging
+  for (const sub of subtitles) {
+    if (sub.url) {
+      console.log(`[FFProfanity] Subtitle: ${sub.label || sub.language} - ${sub.url.substring(0, 100)}...`);
+    }
+  }
 
   const tracks: SubtitleTrack[] = [];
 
@@ -349,6 +363,46 @@ function handleInterceptedMessage(event: MessageEvent): void {
   if (tracks.length > 0) {
     addDetectedTracks(tracks);
   }
+}
+
+/**
+ * Handle subtitle content received from page context (YouTube)
+ * This bypasses the need to fetch with credentials from content script
+ */
+function handleSubtitleContent(content: string, language: string, label: string, source: string): void {
+  // Parse the content
+  const result = parseSubtitles(content);
+
+  if (result.cues.length === 0) {
+    console.error('[FFProfanity] Parse errors:', result.errors);
+    showParseError(result.errors);
+    return;
+  }
+
+  console.log(`[FFProfanity] Parsed ${result.cues.length} cues from ${source} (${language})`);
+
+  // Store as a virtual track
+  const trackId = `content-${Date.now()}`;
+
+  // Process the cues directly
+  processCues(result.cues);
+
+  // Update status
+  currentTrack = {
+    id: trackId,
+    url: '',
+    label: label || language || 'YouTube',
+    language: language || 'en',
+    isSDH: false,
+    isDefault: true,
+    embedded: false,
+    source: source,
+    recommendScore: 10, // High score since we already have content
+  };
+
+  detectedTracks = [currentTrack];
+
+  console.log(`[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${result.cues.length} cues)`);
 }
 
 /**
@@ -449,8 +503,11 @@ function addDetectedTracks(tracks: SubtitleTrack[]): void {
  * Select and load a subtitle track
  */
 async function selectTrack(track: SubtitleTrack): Promise<void> {
+  console.log(`[FFProfanity] Selecting track: ${track.label} (${track.language}) from ${track.source}`);
+  console.log(`[FFProfanity] Track URL: ${track.url?.substring(0, 100)}...`);
+
   if (!track.url && !track.embedded) {
-    console.warn('Track has no URL and is not embedded');
+    console.warn('[FFProfanity] Track has no URL and is not embedded');
     return;
   }
 
@@ -461,12 +518,21 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
   // If track has URL, fetch it
   if (track.url) {
     try {
+      console.log(`[FFProfanity] Fetching subtitle URL: ${track.url}`);
       const response = await fetch(track.url);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
       const content = await response.text();
+      console.log(`[FFProfanity] Received ${content.length} bytes from subtitle URL`);
+      console.log(`[FFProfanity] Content preview: ${content.substring(0, 200)}...`);
+
       await handleSubtitleUpload(content, track.label);
     } catch (error) {
-      console.error('Failed to fetch subtitle track:', error);
-      showNotification('error', 'Failed to load subtitles');
+      console.error('[FFProfanity] Failed to fetch subtitle track:', error);
+      showNotification('error', `Failed to load subtitles: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   } else if (track.embedded && videoElement) {
     // For embedded tracks, we need to read from textTracks API
@@ -874,10 +940,21 @@ function handleMessage(message: unknown): Promise<unknown> {
  * Handle uploaded subtitle file
  */
 async function handleSubtitleUpload(content: string, filename?: string): Promise<void> {
+  console.log(`[FFProfanity] Parsing subtitle content (${content.length} bytes)`);
+
   const result = parseSubtitle(content);
 
+  console.log(`[FFProfanity] Detected format: ${result.format}, cues: ${result.cues.length}, errors: ${result.errors.length}`);
+
   if (result.errors.length > 0) {
-    console.error('Parse errors:', result.errors);
+    console.error('[FFProfanity] Parse errors:', result.errors);
+    showNotification('error', result.errors.join('; '));
+    return;
+  }
+
+  if (result.cues.length === 0) {
+    console.error('[FFProfanity] No cues found in subtitle content');
+    showNotification('error', 'No subtitles found in file');
     return;
   }
 
