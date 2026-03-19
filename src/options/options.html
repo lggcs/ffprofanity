@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profanity Filter - Options</title>
+  <link rel="stylesheet" href="styles/options.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Profanity Filter</h1>
+      <p>Mute profanity in videos with smart subtitle detection</p>
+    </header>
+
+    <section class="section">
+      <h2>📁 Subtitle File</h2>
+      <p>Upload a subtitle file (SRT, ASS/SSA, or WEBVTT format) to use with the extension.</p>
+      <div class="form-group">
+        <label for="fileInput">Choose subtitle file:</label>
+        <input type="file" id="fileInput" accept=".srt,.vtt,.ass,.ssa">
+        <div class="file-info" id="fileInfo">No cues loaded</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>⏱️ Timing Sync</h2>
+      <p>Adjust the subtitle timing offset to sync with your video.</p>
+      <div class="form-group">
+        <label for="offsetSlider">Offset:</label>
+        <input type="range" id="offsetSlider" min="-10000" max="10000" step="100" value="0">
+        <div class="offset-display">
+          <span id="offsetValue">0ms</span>
+        </div>
+        <p class="help-text">Use keyboard shortcuts during playback: Alt+← (earlier), Alt+→ (later)</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>🔍 Detection Settings</h2>
+      <p>Configure how the extension detects profanity.</p>
+      <div class="form-group">
+        <label for="sensitivity">Sensitivity:</label>
+        <select id="sensitivity">
+          <option value="low">Low - Only obvious profanity</option>
+          <option value="medium" selected>Medium - Standard detection</option>
+          <option value="high">High - Aggressive detection (more false positives)</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>📝 Custom Wordlist</h2>
+      <p>Add additional words to detect or remove words from the default list (one per line).</p>
+      <div class="form-group">
+        <textarea id="wordlist" placeholder="Enter words, one per line.&#10;Lines starting with - will be removed from detection.&#10;&#10;Example:&#10;badword1&#10;badword2&#10;-goodword"></textarea>
+      </div>
+      <div class="buttons">
+        <button id="saveWordlist" class="primary">Save Wordlist</button>
+        <button id="resetWordlist" class="secondary">Reset to Default</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>🔒 Privacy</h2>
+      <p>This extension processes all data locally in your browser. No information is sent to external servers.</p>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="optInAutoFetch" disabled>
+          <span>Auto-fetch subtitles from OpenSubtitles (requires opt-in)</span>
+        </label>
+        <p class="help-text">This feature is not yet available.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="buttons">
+        <button id="exportData" class="secondary">Export Settings</button>
+        <button id="importData" class="secondary">Import Settings</button>
+        <button id="reset" class="secondary">Reset All</button>
+      </div>
+    </section>
+
+    <div class="status" id="status"></div>
+
+    <footer class="footer">
+      <p>Profanity Filter v1.0.0 | <a href="https://github.com/ffprofanity/ffprofanity" target="_blank">GitHub</a> | <a href="privacy.html">Privacy Policy</a></p>
+    </footer>
+  </div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

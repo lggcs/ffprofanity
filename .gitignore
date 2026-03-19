@@ -1,0 +1,22 @@
+node_modules/
+dist/
+artifacts/
+*.log
+.DS_Store
+*.swp
+*.swo
+*~
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Test coverage
+coverage/
+
+# Build artifacts
+*.tsbuildinfo
