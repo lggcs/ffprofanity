@@ -340,9 +340,9 @@ function updatePreview(): void {
       { original: 'bitch', display: 'b***h', censored: 'potato' },
     ],
     monkeys: [
-      { original: 'fuck', display: 'f**k', censored: '🙉 hear-no-evil' },
-      { original: 'shit', display: 's**t', censored: '🙈 see-no-evil' },
-      { original: 'bitch', display: 'b***h', censored: '🙊 speak-no-evil' },
+      { original: 'fuck', display: 'f**k', censored: '🙈 🙉 🙊' },
+      { original: 'shit', display: 's**t', censored: '🙈 🙉 🙊' },
+      { original: 'bitch', display: 'b***h', censored: '🙈 🙉 🙊' },
     ],
     custom: [],
   };

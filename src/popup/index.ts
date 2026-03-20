@@ -28,9 +28,6 @@ async function init(): Promise<void> {
   const toggleBtn = document.getElementById('toggle') as HTMLElement;
   const optionsBtn = document.getElementById('options') as HTMLElement;
   const changeTrackBtn = document.getElementById('changeTrackBtn') as HTMLElement;
-  const offsetSlider = document.getElementById('offsetSlider') as HTMLInputElement;
-  const offsetBackBtn = document.getElementById('offsetBack') as HTMLButtonElement;
-  const offsetForwardBtn = document.getElementById('offsetForward') as HTMLButtonElement;
   const subtitleFileInput = document.getElementById('subtitleFile') as HTMLInputElement;
 
   // Load current status
@@ -40,17 +37,7 @@ async function init(): Promise<void> {
   toggleBtn.addEventListener('click', handleToggle);
   optionsBtn.addEventListener('click', handleOptions);
   changeTrackBtn.addEventListener('click', toggleTrackList);
-  offsetSlider.addEventListener('input', handleOffsetChange);
-  offsetBackBtn.addEventListener('click', () => handleOffsetAdjust(-500));
-  offsetForwardBtn.addEventListener('click', () => handleOffsetAdjust(500));
   subtitleFileInput.addEventListener('change', handleFileUpload);
-
-  // Load settings for offset
-  const settings = await browser.storage.local.get('settings');
-  if (settings.settings?.offsetMs) {
-    offsetSlider.value = String(settings.settings.offsetMs);
-    updateOffsetDisplay(settings.settings.offsetMs);
-  }
 }
 
 async function loadStatus(): Promise<void> {
@@ -195,40 +182,6 @@ async function handleToggle(): Promise<void> {
 async function handleOptions(): Promise<void> {
   await browser.runtime.openOptionsPage();
   window.close();
-}
-
-function handleOffsetChange(event: Event): void {
-  const slider = event.target as HTMLInputElement;
-  const offsetMs = parseInt(slider.value, 10);
-  updateOffsetDisplay(offsetMs);
-  sendOffsetUpdate(offsetMs);
-}
-
-async function handleOffsetAdjust(deltaMs: number): Promise<void> {
-  const slider = document.getElementById('offsetSlider') as HTMLInputElement;
-  const currentOffset = parseInt(slider.value, 10);
-  const newOffset = currentOffset + deltaMs;
-  
-  slider.value = String(newOffset);
-  updateOffsetDisplay(newOffset);
-  sendOffsetUpdate(newOffset);
-}
-
-function updateOffsetDisplay(offsetMs: number): void {
-  const offsetValue = document.getElementById('offsetValue') as HTMLElement;
-  const seconds = (offsetMs / 1000).toFixed(1);
-  offsetValue.textContent = offsetMs >= 0 ? `+${seconds}s` : `${seconds}s`;
-}
-
-async function sendOffsetUpdate(offsetMs: number): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
-
-  try {
-    await browser.tabs.sendMessage(tab.id, { type: 'updateOffset', offsetMs });
-  } catch {
-    // Content script may not be ready, ignore
-  }
 }
 
 async function handleFileUpload(event: Event): Promise<void> {

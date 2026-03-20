@@ -105,6 +105,12 @@ async function init(): Promise<void> {
   // Listen for messages from background and popup
   browser.runtime.onMessage.addListener(handleMessage);
 
+  // Start enabled by default if settings say so
+  if (settings.enabled !== false) {
+    isActive = true;
+    startMonitoring();
+  }
+
   console.log('[FFProfanity] Content script ready');
 }
 
@@ -993,6 +999,17 @@ function handleStorageChange(
       oldSettings.upcomingCuesCount !== settings.upcomingCuesCount
     ) {
       applyDisplaySettings();
+    }
+
+    // Handle enabled/disabled state change
+    if (oldSettings.enabled !== settings.enabled) {
+      if (settings.enabled && !isActive) {
+        isActive = true;
+        startMonitoring();
+      } else if (!settings.enabled && isActive) {
+        isActive = false;
+        stopMonitoring();
+      }
     }
   }
 }

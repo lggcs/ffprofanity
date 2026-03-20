@@ -80,6 +80,17 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     },
   },
 
+  // Shut up
+  {
+    profanity: 'shut up',
+    substitutions: {
+      silly: ['hush up', 'hush', 'hush your mouth', 'quiet', 'quiet please'],
+      polite: ['please be quiet', 'hush', 'quiet down'],
+      random: ['zip it', 'shush', 'muffle'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+
   // B-word
   {
     profanity: 'bitch',
@@ -405,7 +416,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['son of a biscuit', 'son of a gun', 'son of a sea biscuit', 'son of a sandwich'],
       polite: ['rascal', 'scoundrel', 'jerk'],
       random: ['child of a banana', 'offspring of spaghetti', 'heir of sunshine'],
-      monkeys: ['🙈 of a 🙉', 'son of a 🙊'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -414,7 +425,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['promise on my popcorn', 'cross my heart', 'hope to sprout', 'swear on my sandwich', 'pinky swear'],
       polite: ['I promise', 'I assure you', 'honestly', 'truly'],
       random: ['I vow on a potato', 'may my noodles turn cold', 'by the power of pizza'],
-      monkeys: ['🙈 promise', '🙉 vow', '🙊 swear'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 ];
