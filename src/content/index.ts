@@ -4,7 +4,7 @@
  */
 
 import { storage } from '../lib/storage';
-import { parseSubtitle, sanitizeText } from '../lib/parser';
+import { parseSubtitle, sanitizeText, ParseResult } from '../lib/parser';
 import { ProfanityDetector, createDetector, computeProfanityWindows } from '../lib/detector';
 import { CueIndex } from '../lib/cueIndex';
 import { selectBestTrack, formatTrackLabel, createTrackFromUser } from '../lib/tracks';
@@ -53,9 +53,12 @@ async function init(): Promise<void> {
 
   // Create detector
   // Only pass wordlist if user has custom words; otherwise use defaults
-  const detectorConfig = {
+  const detectorConfig: Partial<import('../lib/detector').ProfanityConfig> = {
     ...settings,
     wordlist: settings.wordlist.length > 0 ? settings.wordlist : undefined,
+    customSubstitutions: settings.customSubstitutions 
+      ? new Map(Object.entries(settings.customSubstitutions)) 
+      : undefined,
   };
   detector = createDetector(detectorConfig);
   if (settings.wordlist.length > 0) {
@@ -378,11 +381,11 @@ function handleInterceptedMessage(event: MessageEvent): void {
  */
 function handleSubtitleContent(content: string, language: string, label: string, source: string): void {
   // Parse the content
-  const result = parseSubtitles(content);
+  const result = parseSubtitle(content);
 
   if (result.cues.length === 0) {
     console.error('[FFProfanity] Parse errors:', result.errors);
-    showParseError(result.errors);
+    showNotification('error', `Failed to parse subtitle: ${result.errors.join(', ')}`);
     return;
   }
 
@@ -403,7 +406,7 @@ function handleSubtitleContent(content: string, language: string, label: string,
     isSDH: false,
     isDefault: true,
     embedded: false,
-    source: source,
+    source: source as 'video' | 'network' | 'user',
     recommendScore: 10, // High score since we already have content
   };
 
@@ -417,12 +420,12 @@ function handleSubtitleContent(content: string, language: string, label: string,
  */
 async function autoSelectBestTrack(): Promise<void> {
   if (detectedTracks.length === 0) return;
-  
-  const best = selectBestTrack(detectedTracks, settings);
-  console.log('[FFProfanity] Auto-selecting track:', best?.label);
-  
-  if (best) {
-    await selectTrack(best);
+
+  const selection = selectBestTrack(detectedTracks, settings);
+  console.log('[FFProfanity] Auto-selecting track:', selection.track?.label);
+
+  if (selection.track) {
+    await selectTrack(selection.track);
   }
 }
 
@@ -658,7 +661,7 @@ function findVideoElement(): void {
   // Also observe for new video elements (for SPA navigation)
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         // Check if the added node is a video or contains a video
         if (node instanceof HTMLVideoElement) {
           console.log('[FFProfanity] Video element added via mutation');
@@ -666,10 +669,10 @@ function findVideoElement(): void {
           attachVideoListeners(videoElement);
         } else if (node instanceof HTMLElement) {
           // Check descendants for video
-          const nestedVideos = node.querySelectorAll('video');
+          const nestedVideos = Array.from(node.querySelectorAll('video'));
           if (nestedVideos.length > 0) {
             console.log('[FFProfanity] Video found in added subtree');
-            videoElement = nestedVideos[0] as HTMLVideoElement;
+            videoElement = nestedVideos[0];
             attachVideoListeners(videoElement);
           }
         }
@@ -918,13 +921,22 @@ function applyDisplaySettings(): void {
 /**
  * Handle storage change events
  */
-function handleStorageChange(changes: Record<string, { newValue: unknown; oldValue: unknown }>): void {
+function handleStorageChange(
+  changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+  _areaName: string
+): void {
   if (changes.settings) {
     const oldSettings = settings;
     settings = { ...settings, ...(changes.settings.newValue as Partial<Settings>) };
 
     // Recreate detector with new settings
-    detector = createDetector(settings);
+    const newDetectorConfig: Partial<import('../lib/detector').ProfanityConfig> = {
+      ...settings,
+      customSubstitutions: settings.customSubstitutions 
+        ? new Map(Object.entries(settings.customSubstitutions)) 
+        : undefined,
+    };
+    detector = createDetector(newDetectorConfig);
 
     // Apply substitution settings
     if (settings.useSubstitutions) {
@@ -951,6 +963,18 @@ function handleStorageChange(changes: Record<string, { newValue: unknown; oldVal
       }
       // Rebuild index with updated cues
       cueIndex.build(cues);
+    }
+
+    // Re-process censored text if substitution settings changed
+    if (oldSettings.useSubstitutions !== settings.useSubstitutions ||
+        oldSettings.substitutionCategory !== settings.substitutionCategory) {
+      console.log(`[FFProfanity] Substitution settings changed, re-processing cue text`);
+      for (const cue of cues) {
+        if (cue.hasProfanity && cue.profanityMatches.length > 0) {
+          const detection = detector.detect(cue.text);
+          cue.censoredText = detection.censoredText;
+        }
+      }
     }
 
     // Apply display settings if any changed
@@ -1261,7 +1285,7 @@ function updatePlayback(currentTimeMs: number): void {
     currentCueEl.classList.remove('ffprofanity-hidden');
 
     // Show next cues preview if enabled
-    if (settings.showUpcomingCues && settings.upcomingCuesCount > 0) {
+    if (settings.showUpcomingCues && settings.upcomingCuesCount > 0 && nextCuesEl) {
       const nextCues = cueIndex.getNextCues(currentTimeMs, settings.upcomingCuesCount, settings.offsetMs);
       if (nextCues.length > 0) {
         const previews = nextCues
@@ -1275,7 +1299,7 @@ function updatePlayback(currentTimeMs: number): void {
       } else {
         nextCuesEl.innerHTML = '';
       }
-    } else {
+    } else if (nextCuesEl) {
       nextCuesEl.innerHTML = '';
     }
   } else {

@@ -47,6 +47,11 @@ export interface SiteExtractor {
    * Watch for dynamic subtitle loading (returns cleanup function)
    */
   watchForChanges?(callback: (subs: DetectedSubtitle[]) => void): () => void;
+
+  /**
+   * Get injected script to run in page context
+   */
+  getInjectedScript?(): string;
 }
 
 /**
@@ -175,7 +180,7 @@ export function detectedToTrack(sub: DetectedSubtitle): SubtitleTrack {
     isSDH: false,
     isDefault: false,
     embedded: false,
-    source: sub.source,
+    source: sub.source as 'video' | 'network' | 'user',
     recommendScore: 5,
   };
 }

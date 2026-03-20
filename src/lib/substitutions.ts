@@ -2,10 +2,10 @@
  * Profanity Substitutions
  *
  * Fun, family-friendly alternatives to profanity words.
- * Categories: silly, polite, random, custom
+ * Categories: silly, polite, random, monkeys, custom
  */
 
-export type SubstitutionCategory = 'silly' | 'polite' | 'random' | 'custom';
+export type SubstitutionCategory = 'silly' | 'polite' | 'random' | 'monkeys' | 'custom';
 
 export interface SubstitutionMapping {
   profanity: string;              // The profanity word (normalized)
@@ -13,6 +13,7 @@ export interface SubstitutionMapping {
     silly: string[];              // Silly/fun alternatives
     polite: string[];             // Polite alternatives
     random: string[];             // Random/weird alternatives
+    monkeys: string[];            // Monkey emoji alternatives
   };
 }
 
@@ -28,6 +29,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['fudge', 'frick', 'freak', 'fiddlesticks', 'firetruck', 'fluffernutter', 'frock'],
       polite: ['darn', 'bother', 'drat'],
       random: ['bananas', 'noodles', 'shenanigans'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -36,6 +38,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['fudging', 'fricking', 'freaking', 'fiddlesticks-ing', 'flabbergasted'],
       polite: ['darned', 'blasted', 'confounded'],
       random: ['noodly', 'bananarama'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -44,6 +47,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['fudger', 'frick-fracker', 'fire-trucker', 'fellow'],
       polite: ['jerk', 'meanie', 'rascal'],
       random: ['noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -54,6 +58,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['shoot', 'shiz', 'shenanigans', 'sugar', 'shucks', 'spaghetti', 'poopypants'],
       polite: ['crap', 'poop', 'dung'],
       random: ['bananas', 'noodles', 'wibbly-wobbly'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -62,6 +67,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['shoothead', 'sillyhead', 'poopyhead', 'noodlehead', 'spaghetti-head'],
       polite: ['dummy', 'fool', 'nitwit'],
       random: ['banana-brain', 'potato-head'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -70,6 +76,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['bullshoot', 'bullroar', 'malarkey', 'flapdoodle', 'poppycock', 'codswallop'],
       polite: ['nonsense', 'rubbish', 'hogwash'],
       random: ['banana-oil', 'fairy-tales'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -80,6 +87,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['beach', 'birch', 'bench', 'britch', 'biscuit', 'butterscotch'],
       polite: ['meanie', 'jerk', 'rude person'],
       random: ['banana', 'noodle', 'pickle'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -88,6 +96,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['beachy', 'britchy', 'grumpy-pants', 'crab-apple'],
       polite: ['grouchy', 'irritable', 'cranky'],
       random: ['noodly', 'bananical'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -98,6 +107,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['cant', 'coot', 'clown', 'coconut', 'cucumber', 'cabbage'],
       polite: ['jerk', 'meanie', 'unpleasant person'],
       random: ['banana', 'potato', 'noodle'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -108,6 +118,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['dickens', 'dingle', 'dork', 'ding-dong', 'donut', 'duck'],
       polite: ['jerk', 'meanie', 'rascal'],
       random: ['noodle', 'banana', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -116,6 +127,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['dinglehead', 'ding-dong-head', 'dorkasaurus', 'doofus-head'],
       polite: ['jerk', 'dummy', 'fool'],
       random: ['banana-brain', 'potato-head', 'noodle-noggin'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -126,6 +138,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['asterisk', 'applesauce', 'avocado', 'anteater', 'ankle'],
       polite: ['butt', 'bottom', 'rear'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -134,6 +147,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['asterisk-hole', 'applesauce', 'avocado', 'ankle', 'airhead'],
       polite: ['jerk', 'meanie', 'rude person'],
       random: ['banana-peel', 'noodle-nose', 'potato-face'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -142,6 +156,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['asterisk-hat', 'applesauce-hat', 'avocado-hat', 'ankle-hat'],
       polite: ['jerk', 'fool', 'nitwit'],
       random: ['banana-cap', 'noodle-hat'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -152,6 +167,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['pushy', 'pussycat', 'pistol', 'pumpkin', 'pancake', 'pastry'],
       polite: ['wimp', 'coward', 'scaredy-cat'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -162,6 +178,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['bass-tard', 'barnacle', 'buttercup', 'biscuit-eater', 'buffoon'],
       polite: ['jerk', 'meanie', 'rascal', 'scoundrel'],
       random: ['banana-muffin', 'potato-cake', 'noodle-brain'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -172,6 +189,43 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['darn', 'dang', 'doggone', 'dangit', 'drat', 'dagnabbit'],
       polite: ['bother', 'drat'],
       random: ['bananas', 'fiddlesticks'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+  {
+    profanity: 'damnable',
+    substitutions: {
+      silly: ['darnable', 'blasted', 'confounded'],
+      polite: ['terrible', 'awful'],
+      random: ['banana-ish', 'noodly'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+  {
+    profanity: 'damned',
+    substitutions: {
+      silly: ['darned', 'danged', 'dratted'],
+      polite: ['cursed', 'blighted'],
+      random: ['bananad', 'noodled'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+  {
+    profanity: 'god',
+    substitutions: {
+      silly: ['gosh', 'golly', 'goodness', 'gadzooks', 'gee'],
+      polite: ['goodness', 'gracious'],
+      random: ['banana', 'noodle'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+  {
+    profanity: 'gods',
+    substitutions: {
+      silly: ['goshes', 'gollies', 'deities', 'divinities'],
+      polite: ['heavens', 'goodness'],
+      random: ['bananas', 'noodles'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -180,6 +234,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['goddarn', 'goddang', 'goldarn', 'gol-durn'],
       polite: ['confounded', 'blasted'],
       random: ['banana-banana', 'noodly-goodness'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -190,6 +245,29 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['heck', 'h-e-double-hockey-sticks', 'hades', 'hullabaloo'],
       polite: ['heck', 'darn'],
       random: ['bananas', 'noodles'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+
+  // Jesus
+  {
+    profanity: 'jesus',
+    substitutions: {
+      silly: ['jeez', 'jeepers', 'jiminy', 'jumping-jehoshaphat', 'jiminy-cricket'],
+      polite: ['goodness', 'gracious', 'heavens'],
+      random: ['banana', 'noodle'],
+      monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+
+  // Christ
+  {
+    profanity: 'christ',
+    substitutions: {
+      silly: ['crikey', 'crumbs', 'crickey', 'criminy', 'caramba'],
+      polite: ['goodness', 'heavens'],
+      random: ['banana', 'noodle'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -200,6 +278,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['cwap', 'cranberries', 'crackers', 'crayons', 'crumb-cake'],
       polite: ['poop', 'darn', 'shoot'],
       random: ['bananas', 'noodles', 'spaghetti'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -210,6 +289,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['warlord', 'warthog', 'wombat', 'walrus', 'waffle'],
       polite: ['promiscuous person', 'tramp'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -220,6 +300,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['sloth', 'sloth-face', 'slug', 'slippers', 'slushie'],
       polite: ['tramp', 'loose person'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -230,6 +311,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['twit', 'twonk', 'twinkie', 'tweedy', 'twerp'],
       polite: ['jerk', 'fool', 'nitwit'],
       random: ['banana', 'noodle', 'wombat'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -240,6 +322,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['waffle', 'wonka', 'weasel', 'wombat', 'waffle-iron'],
       polite: ['jerk', 'fool', 'idiot'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -250,6 +333,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['bailiffs', 'bangers', 'biscuits', 'balloons', 'bananas'],
       polite: ['nonsense', 'rubbish', 'poppycock'],
       random: ['noodly-nonsense', 'spaghetti-speak'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -260,6 +344,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['fizz', 'fuzzy', 'prune', 'peach', 'pixel', 'pickle'],
       polite: ['pee', 'urinate'],
       random: ['banana', 'noodle'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -268,6 +353,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['ticked', 'miffed', 'fizzed', 'pickled', 'pruned'],
       polite: ['angry', 'upset', 'annoyed'],
       random: ['bananas', 'noodly'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -278,6 +364,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['cork', 'chalk', 'clock', 'cabbage', 'coconut', 'cat'],
       polite: ['jerk', 'meanie'],
       random: ['banana', 'noodle', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -288,6 +375,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['tips', 'toots', 'treats', 'twinkies', 'tater-tots'],
       polite: ['breasts', 'bosom'],
       random: ['bananas', 'noodles'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 
@@ -298,6 +386,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['neighbor', 'ninja', 'noodle', 'novice', 'newbie'],
       polite: ['friend', 'brother', 'person'],
       random: ['banana', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
   {
@@ -306,6 +395,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       silly: ['neighbor', 'ninja', 'noodle', 'novice', 'newbie'],
       polite: ['friend', 'brother', 'person'],
       random: ['banana', 'potato'],
+      monkeys: ['🙈', '🙉', '🙊'],
     },
   },
 ];
@@ -337,7 +427,13 @@ export function getRandomSubstitution(
   const mapping = map.get(normalizedWord);
   if (!mapping) return null;
 
-  const options = mapping.substitutions[category];
+  // Only use valid categories that exist in the substitutions map
+  const validCategories = ['silly', 'polite', 'random', 'monkeys'] as const;
+  const validCategory = validCategories.includes(category as typeof validCategories[number])
+    ? category as typeof validCategories[number]
+    : 'silly';
+
+  const options = mapping.substitutions[validCategory];
   if (!options || options.length === 0) return null;
 
   // Return random option

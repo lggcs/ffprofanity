@@ -85,15 +85,15 @@ export function detectSubtitleFormat(
  */
 export function extractTracksFromVideo(video: HTMLVideoElement): SubtitleTrack[] {
   const tracks: SubtitleTrack[] = [];
-  
+
   // Get all <track> children
-  const trackElements = video.querySelectorAll('track[kind="subtitles"], track[kind="captions"]');
-  
+  const trackElements = Array.from(video.querySelectorAll('track[kind="subtitles"], track[kind="captions"]')) as HTMLTrackElement[];
+
   for (const element of trackElements) {
     const track = createTrackFromElement(element);
     tracks.push(track);
   }
-  
+
   return tracks;
 }
 
@@ -102,7 +102,7 @@ export function extractTracksFromVideo(video: HTMLVideoElement): SubtitleTrack[]
  */
 export function scanPageForTracks(): SubtitleTrack[] {
   const allTracks: SubtitleTrack[] = [];
-  const videos = document.querySelectorAll('video');
+  const videos = Array.from(document.querySelectorAll('video'));
 
   for (const video of videos) {
     const tracks = extractTracksFromVideo(video);
@@ -231,7 +231,7 @@ export function parseM3U8Subtitles(content: string, baseUrl: string): SubtitleTr
  */
 export function extractFromPageScripts(): SubtitleTrack[] {
   const tracks: SubtitleTrack[] = [];
-  const scripts = document.querySelectorAll('script');
+  const scripts = Array.from(document.querySelectorAll('script'));
 
   // Patterns to search for
   const jsonPatterns = [

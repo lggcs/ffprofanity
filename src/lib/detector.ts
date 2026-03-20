@@ -187,10 +187,12 @@ export function computeProfanityWindows(
   }
   
   // Buffer settings based on sensitivity
+  // Buffers account for timing uncertainty in syllable-based word estimation
+  // Pre-buffer is larger because missing the start of a word is worse (you hear the profanity)
   const bufferSettings = {
-    low: { before: 50, after: 50 },      // Minimal buffer
-    medium: { before: 150, after: 100 },  // Moderate buffer
-    high: { before: 200, after: 50 }      // Not used, but defined for completeness
+    low: { before: 200, after: 150 },     // Moderate buffer for low sensitivity
+    medium: { before: 500, after: 300 },   // Balanced - catches word onset without over-muting
+    high: { before: 200, after: 50 }       // Not used (high mutes entire cue)
   };
   
   const buffer = bufferSettings[sensitivity];
@@ -511,7 +513,13 @@ export class ProfanityDetector {
     const mapping = this.substitutionMap.get(normalized);
     if (!mapping) return null;
 
-    const categoryOptions = mapping.substitutions[this.substitutionCategory];
+    // Get substitutions for the selected category (only use valid categories)
+    const validCategories = ['silly', 'polite', 'random', 'monkeys'] as const;
+    const category = validCategories.includes(this.substitutionCategory as typeof validCategories[number])
+      ? this.substitutionCategory as typeof validCategories[number]
+      : 'silly';
+    
+    const categoryOptions = mapping.substitutions[category];
     if (!categoryOptions || categoryOptions.length === 0) {
       // Fall back to silly category if current category is empty
       const sillyOptions = mapping.substitutions['silly'];

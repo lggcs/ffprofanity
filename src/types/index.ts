@@ -80,7 +80,7 @@ export interface Settings {
   autoSelectTrack: boolean;    // Auto-select best detected track
   // Substitution settings
   useSubstitutions: boolean;   // Use fun substitutions instead of [CENSORED]
-  substitutionCategory: 'silly' | 'polite' | 'random' | 'custom';
+  substitutionCategory: 'silly' | 'polite' | 'random' | 'monkeys' | 'custom';
   customSubstitutions: Record<string, string>;  // Custom word mappings
   // Subtitle display settings
   showUpcomingCues: boolean;   // Show upcoming cues preview

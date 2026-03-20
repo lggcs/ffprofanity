@@ -237,16 +237,17 @@ async function handleFileUpload(event: Event): Promise<void> {
   if (!file) return;
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
+  const tabId = tab.id;
+  if (!tabId) return;
 
   const reader = new FileReader();
   reader.onload = async (e) => {
     const content = e.target?.result as string;
     try {
-      await browser.tabs.sendMessage(tab.id, { 
-        type: 'uploadCues', 
+      await browser.tabs.sendMessage(tabId, {
+        type: 'uploadCues',
         content,
-        filename: file.name 
+        filename: file.name
       });
       trackList.classList.add('hidden');
       await loadStatus();

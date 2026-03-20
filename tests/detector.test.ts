@@ -627,12 +627,12 @@ describe('Profanity Windows', () => {
         [{ word: 'fuck', startIndex: 8, endIndex: 12 }], // matches
         'medium' // sensitivity
       );
-      
+
       expect(windows.length).toBe(1);
       expect(windows[0].cueId).toBe(1);
       expect(windows[0].word).toBe('fuck');
-      expect(windows[0].bufferBeforeMs).toBe(150); // medium
-      expect(windows[0].bufferAfterMs).toBe(100); // medium
+      expect(windows[0].bufferBeforeMs).toBe(500); // medium
+      expect(windows[0].bufferAfterMs).toBe(300); // medium
     });
 
     it('should compute windows for low sensitivity with smaller buffers', () => {
@@ -644,10 +644,10 @@ describe('Profanity Windows', () => {
         [{ word: 'fuck', startIndex: 8, endIndex: 12 }],
         'low'
       );
-      
+
       expect(windows.length).toBe(1);
-      expect(windows[0].bufferBeforeMs).toBe(50); // low
-      expect(windows[0].bufferAfterMs).toBe(50); // low
+      expect(windows[0].bufferBeforeMs).toBe(200); // low
+      expect(windows[0].bufferAfterMs).toBe(150); // low
     });
 
     it('should return empty array for high sensitivity', () => {
