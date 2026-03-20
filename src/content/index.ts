@@ -925,9 +925,12 @@ function handleStorageChange(
   changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
   _areaName: string
 ): void {
+  console.log('[FFProfanity] Storage change detected:', changes);
   if (changes.settings) {
     const oldSettings = settings;
-    settings = { ...settings, ...(changes.settings.newValue as Partial<Settings>) };
+    const newSettings = changes.settings.newValue as Partial<Settings>;
+    console.log('[FFProfanity] Settings changed:', { old: oldSettings, new: newSettings });
+    settings = { ...settings, ...newSettings };
 
     // Recreate detector with new settings
     const newDetectorConfig: Partial<import('../lib/detector').ProfanityConfig> = {
@@ -968,11 +971,13 @@ function handleStorageChange(
     // Re-process censored text if substitution settings changed
     if (oldSettings.useSubstitutions !== settings.useSubstitutions ||
         oldSettings.substitutionCategory !== settings.substitutionCategory) {
-      console.log(`[FFProfanity] Substitution settings changed, re-processing cue text`);
+      console.log(`[FFProfanity] Substitution settings changed from ${oldSettings.useSubstitutions}/${oldSettings.substitutionCategory} to ${settings.useSubstitutions}/${settings.substitutionCategory}, re-processing cue text`);
+      console.log(`[FFProfanity] Detector useSubstitutions:`, detector['useSubstitutions']);
       for (const cue of cues) {
         if (cue.hasProfanity && cue.profanityMatches.length > 0) {
           const detection = detector.detect(cue.text);
           cue.censoredText = detection.censoredText;
+          console.log(`[FFProfanity] Re-processed cue ${cue.id}: "${cue.text.substring(0, 30)}..." -> "${cue.censoredText.substring(0, 30)}..."`);
         }
       }
     }
@@ -1012,6 +1017,14 @@ function handleMessage(message: unknown): Promise<unknown> {
       if (typeof offset === 'number') {
         settings.offsetMs = offset;
         storage.setSetting('offsetMs', offset);
+      }
+      break;
+
+    case 'updateSettings':
+      // Settings updated from options page
+      console.log('[FFProfanity] Received updateSettings message:', msg.settings);
+      if (msg.settings) {
+        handleStorageChange({ settings: { newValue: msg.settings } }, 'local');
       }
       break;
 
@@ -1113,6 +1126,8 @@ async function handleSubtitleUpload(content: string, filename?: string): Promise
  * Process cues with profanity detection
  */
 function processCues(newCues: Cue[]): void {
+  console.log(`[FFProfanity] Processing ${newCues.length} cues, useSubstitutions: ${settings.useSubstitutions}, category: ${settings.substitutionCategory}`);
+
   cues = newCues.map(cue => {
     const detection = detector.detect(cue.text);
 

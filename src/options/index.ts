@@ -83,6 +83,7 @@ async function init(): Promise<void> {
   offsetSlider.addEventListener('input', handleOffsetChange);
   fileInput.addEventListener('change', handleFileUpload);
   saveWordlistBtn.addEventListener('click', handleSaveWordlist);
+  sensitivitySelect.addEventListener('change', () => autoSaveSettings());
   document.getElementById('save')?.addEventListener('click', saveAllSettings);
   document.getElementById('reset')?.addEventListener('click', resetSettings);
 
@@ -168,20 +169,37 @@ async function loadSettings(): Promise<void> {
 function handleOffsetChange(): void {
   const offset = parseInt(offsetSlider.value, 10);
   offsetValue.textContent = `${offset}ms`;
+  autoSaveSettings();
+}
+
+// Debounced auto-save
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+async function autoSaveSettings(): Promise<void> {
+  // Clear previous timeout
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  // Debounce for 500ms
+  saveTimeout = setTimeout(async () => {
+    await saveAllSettings();
+  }, 500);
 }
 
 function handleSubstitutionToggle(): void {
   updateSubstitutionUI();
   updatePreview();
+  autoSaveSettings();
 }
 
 function handleCategoryChange(): void {
   updateSubstitutionUI();
   updatePreview();
+  autoSaveSettings();
 }
 
 function handleCustomSubstitutionsChange(): void {
   updatePreview();
+  autoSaveSettings();
 }
 
 function updateSubstitutionUI(): void {
@@ -201,6 +219,7 @@ function handleDisplaySettingsChange(): void {
     upcomingCountGroup.style.display = showUpcomingCuesCheckbox.checked ? 'block' : 'none';
   }
   updateDisplayPreview();
+  autoSaveSettings();
 }
 
 function handleColorChange(event: Event): void {
@@ -212,6 +231,7 @@ function handleColorChange(event: Event): void {
     backgroundColorTextInput.value = input.value;
   }
   updateDisplayPreview();
+  autoSaveSettings();
 }
 
 function handleColorTextChange(event: Event): void {
@@ -221,6 +241,7 @@ function handleColorTextChange(event: Event): void {
   if (hexPattern.test(input.value)) {
     fontColorInput.value = input.value;
     updateDisplayPreview();
+    autoSaveSettings();
   }
 }
 
@@ -231,6 +252,7 @@ function handleBackgroundColorTextChange(event: Event): void {
   if (hexPattern.test(input.value)) {
     backgroundColorInput.value = input.value;
     updateDisplayPreview();
+    autoSaveSettings();
   }
 }
 
@@ -238,6 +260,7 @@ function handleOpacityChange(): void {
   const opacity = backgroundOpacitySlider.value;
   opacityValue.textContent = `${opacity}%`;
   updateDisplayPreview();
+  autoSaveSettings();
 }
 
 function updateDisplayPreview(): void {
@@ -293,22 +316,33 @@ function updatePreview(): void {
   const category = categorySelect.value;
   const customText = customSubstitutionsTextarea.value;
 
-  // Preview examples based on category
-  const examples: Record<string, Array<{original: string; censored: string}>> = {
+  // Helper function to sanitize profanity for child-friendly display
+  const sanitize = (word: string): string => {
+    if (word.length <= 2) return word;
+    return word[0] + '*'.repeat(word.length - 2) + word[word.length - 1];
+  };
+
+  // Preview examples based on category (show sanitized profanity, actual substitutions)
+  const examples: Record<string, Array<{original: string; display: string; censored: string}>> = {
     silly: [
-      { original: 'fuck', censored: 'fudge' },
-      { original: 'shit', censored: 'shenanigans' },
-      { original: 'bitch', censored: 'biscuit' },
+      { original: 'fuck', display: 'f**k', censored: 'fudge' },
+      { original: 'shit', display: 's**t', censored: 'shenanigans' },
+      { original: 'bitch', display: 'b***h', censored: 'biscuit' },
     ],
     polite: [
-      { original: 'fuck', censored: 'darn' },
-      { original: 'shit', censored: 'nonsense' },
-      { original: 'bitch', censored: 'meanie' },
+      { original: 'fuck', display: 'f**k', censored: 'darn' },
+      { original: 'shit', display: 's**t', censored: 'nonsense' },
+      { original: 'bitch', display: 'b***h', censored: 'meanie' },
     ],
     random: [
-      { original: 'fuck', censored: 'bananas' },
-      { original: 'shit', censored: 'noodles' },
-      { original: 'bitch', censored: 'potato' },
+      { original: 'fuck', display: 'f**k', censored: 'bananas' },
+      { original: 'shit', display: 's**t', censored: 'noodles' },
+      { original: 'bitch', display: 'b***h', censored: 'potato' },
+    ],
+    monkeys: [
+      { original: 'fuck', display: 'f**k', censored: '🙉 hear-no-evil' },
+      { original: 'shit', display: 's**t', censored: '🙈 see-no-evil' },
+      { original: 'bitch', display: 'b***h', censored: '🙊 speak-no-evil' },
     ],
     custom: [],
   };
@@ -319,7 +353,11 @@ function updatePreview(): void {
     for (const line of lines) {
       const [word, replacement] = line.split('=').map(s => s.trim());
       if (word && replacement) {
-        examples.custom.push({ original: word, censored: replacement });
+        examples.custom.push({ 
+          original: word, 
+          display: sanitize(word), 
+          censored: replacement 
+        });
       }
     }
   }
@@ -333,9 +371,9 @@ function updatePreview(): void {
   // Build preview HTML
   const previewWords = categoryExamples.slice(0, 3);
   const previewHtml = previewWords
-    .map(e => `<b>${e.original}</b> → <b>${e.censored}</b>`)
+    .map(e => `${e.display} → <b>${e.censored}</b>`)
     .join('<br>');
-  
+
   previewTextEl.innerHTML = `
     <strong>Category: ${category.charAt(0).toUpperCase() + category.slice(1)}</strong><br>
     ${previewHtml}
