@@ -1,15 +1,22 @@
 /**
  * Profanity Detector
- * 
+ *
  * Detects profanity in text using:
  * 1. Exact word matching against a wordlist
  * 2. Obfuscation pattern matching (regex)
  * 3. Optional fuzzy matching for misspellings
  * 4. Context-aware filtering to reduce false positives
+ * 5. Fun substitutions instead of [CENSORED]
  */
 
 import { DEFAULT_WORDLIST } from './wordlist';
 import { isAllowedInContext, getProfanityConfidence } from './context-rules';
+import {
+  DEFAULT_SUBSTITUTIONS,
+  buildSubstitutionMap,
+  type SubstitutionCategory,
+  type SubstitutionMapping,
+} from './substitutions';
 
 // Character substitutions used to bypass filters
 const SUBSTITUTIONS: Record<string, string> = {
@@ -62,6 +69,10 @@ export interface ProfanityConfig {
   sensitivity: 'low' | 'medium' | 'high';
   useFuzzyMatching: boolean;
   useContextFiltering: boolean;
+  // Substitution settings
+  useSubstitutions: boolean;
+  substitutionCategory: SubstitutionCategory;
+  customSubstitutions: Map<string, string>;
 }
 
 const SENSITIVITY_THRESHOLDS = {
@@ -69,6 +80,14 @@ const SENSITIVITY_THRESHOLDS = {
   medium: 50,
   high: 20,
 };
+
+/**
+ * Get a random element from an array
+ */
+function randomChoice<T>(arr: T[]): T | undefined {
+  if (arr.length === 0) return undefined;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 /**
  * Normalize text for profanity matching
@@ -138,6 +157,11 @@ export class ProfanityDetector {
   private customPatterns: { pattern: RegExp; word: string }[];
   private useFuzzyMatching: boolean;
   private useContextFiltering: boolean;
+  // Substitution settings
+  private useSubstitutions: boolean;
+  private substitutionCategory: SubstitutionCategory;
+  private customSubstitutions: Map<string, string>;
+  private substitutionMap: Map<string, SubstitutionMapping>;
 
   constructor(config: Partial<ProfanityConfig> = {}) {
     const fullConfig: ProfanityConfig = {
@@ -146,6 +170,9 @@ export class ProfanityDetector {
       sensitivity: 'medium',
       useFuzzyMatching: false,
       useContextFiltering: true,
+      useSubstitutions: false,
+      substitutionCategory: 'silly',
+      customSubstitutions: new Map(),
       ...config,
     };
     this.wordlist = new Set(fullConfig.wordlist.map(w => normalizeText(w)));
@@ -155,6 +182,10 @@ export class ProfanityDetector {
     this.customPatterns = [...OBFUSCATION_PATTERNS];
     this.useFuzzyMatching = fullConfig.useFuzzyMatching;
     this.useContextFiltering = fullConfig.useContextFiltering;
+    this.useSubstitutions = fullConfig.useSubstitutions;
+    this.substitutionCategory = fullConfig.substitutionCategory;
+    this.customSubstitutions = fullConfig.customSubstitutions;
+    this.substitutionMap = buildSubstitutionMap(DEFAULT_SUBSTITUTIONS);
   }
 
   /**
@@ -203,6 +234,51 @@ export class ProfanityDetector {
    */
   setContextFiltering(enabled: boolean): void {
     this.useContextFiltering = enabled;
+  }
+
+  /**
+   * Enable or disable substitutions
+   */
+  setSubstitutions(enabled: boolean, category?: SubstitutionCategory): void {
+    this.useSubstitutions = enabled;
+    if (category) {
+      this.substitutionCategory = category;
+    }
+  }
+
+  /**
+   * Set custom substitutions
+   */
+  setCustomSubstitutions(custom: Map<string, string>): void {
+    this.customSubstitutions = custom;
+  }
+
+  /**
+   * Get substitution for a profanity word
+   */
+  getSubstitution(word: string): string | null {
+    const normalized = normalizeText(word);
+
+    // Check custom substitutions first
+    if (this.customSubstitutions.has(normalized)) {
+      return this.customSubstitutions.get(normalized) || null;
+    }
+
+    // Check default substitution map
+    const mapping = this.substitutionMap.get(normalized);
+    if (!mapping) return null;
+
+    const categoryOptions = mapping.substitutions[this.substitutionCategory];
+    if (!categoryOptions || categoryOptions.length === 0) {
+      // Fall back to silly category if current category is empty
+      const sillyOptions = mapping.substitutions['silly'];
+      if (sillyOptions && sillyOptions.length > 0) {
+        return randomChoice(sillyOptions) || null;
+      }
+      return null;
+    }
+
+    return randomChoice(categoryOptions) || null;
   }
 
   /**
@@ -306,7 +382,7 @@ export class ProfanityDetector {
     const score = matches.length > 0 ? Math.min(100, totalScore / matches.length) : 0;
     const hasProfanity = score >= this.sensitivityThreshold && matches.length > 0;
 
-    // Generate censored text
+    // Generate censored text (with fun substitutions or [CENSORED])
     const censoredText = this.censorText(text, matches);
 
     return {
@@ -318,7 +394,7 @@ export class ProfanityDetector {
   }
 
   /**
-   * Replace profanity matches with [CENSORED]
+   * Replace profanity matches with [CENSORED] or fun substitutions
    * Preserves original text positions
    */
   censorText(text: string, matches: ProfanityMatch[]): string {
@@ -329,7 +405,17 @@ export class ProfanityDetector {
 
     let result = text;
     for (const match of sortedMatches) {
-      result = result.slice(0, match.startIndex) + '[CENSORED]' + result.slice(match.endIndex);
+      let replacement: string;
+
+      if (this.useSubstitutions) {
+        // Try to get a fun substitution
+        const sub = this.getSubstitution(match.word);
+        replacement = sub || '[CENSORED]';
+      } else {
+        replacement = '[CENSORED]';
+      }
+
+      result = result.slice(0, match.startIndex) + replacement + result.slice(match.endIndex);
     }
 
     return result;
@@ -340,13 +426,15 @@ export class ProfanityDetector {
 export function createDetector(config?: Partial<ProfanityConfig>): ProfanityDetector {
   // Don't spread wordlist if it's empty or undefined (use defaults)
   const { wordlist: configWordlist, ...restConfig } = config || {} as Partial<ProfanityConfig>;
-  
+
   return new ProfanityDetector({
     wordlist: DEFAULT_WORDLIST,
     fuzzyThreshold: 0.20,
     sensitivity: 'medium',
     useFuzzyMatching: false,
     useContextFiltering: true,
+    useSubstitutions: false,
+    substitutionCategory: 'silly',
     ...restConfig,
     ...(configWordlist && configWordlist.length > 0 ? { wordlist: configWordlist } : {}),
   });

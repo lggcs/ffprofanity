@@ -64,6 +64,10 @@ export interface Settings {
   preferredLanguage: string;  // User's preferred subtitle language
   preferSDH: boolean;          // Prefer SDH/CC tracks
   autoSelectTrack: boolean;    // Auto-select best detected track
+  // Substitution settings
+  useSubstitutions: boolean;   // Use fun substitutions instead of [CENSORED]
+  substitutionCategory: 'silly' | 'polite' | 'random' | 'custom';
+  customSubstitutions: Record<string, string>;  // Custom word mappings
 }
 
 // Storage schema version

@@ -18,6 +18,10 @@ const DEFAULT_SETTINGS: Settings = {
   preferredLanguage: 'en',
   preferSDH: true,
   autoSelectTrack: true,
+  // Substitution settings
+  useSubstitutions: false,
+  substitutionCategory: 'silly',
+  customSubstitutions: {},
 };
 
 type StorageKey = 'cues_v1' | 'settings' | 'presets' | 'detectedTracks' | 'currentTrack';

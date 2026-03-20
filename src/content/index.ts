@@ -46,10 +46,10 @@ let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
  */
 async function init(): Promise<void> {
   console.log('[FFProfanity] Content script initializing...');
-  
+
   // Load settings
   settings = await storage.getSettings();
-  console.log('[FFProfanity] Settings loaded:', { offsetMs: settings.offsetMs, sensitivity: settings.sensitivity });
+  console.log('[FFProfanity] Settings loaded:', { offsetMs: settings.offsetMs, sensitivity: settings.sensitivity, useSubstitutions: settings.useSubstitutions });
 
   // Create detector
   // Only pass wordlist if user has custom words; otherwise use defaults
@@ -60,6 +60,13 @@ async function init(): Promise<void> {
   detector = createDetector(detectorConfig);
   if (settings.wordlist.length > 0) {
     detector.addWords(settings.wordlist);
+  }
+  // Apply substitution settings
+  if (settings.useSubstitutions) {
+    detector.setSubstitutions(true, settings.substitutionCategory);
+    if (settings.customSubstitutions && Object.keys(settings.customSubstitutions).length > 0) {
+      detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
+    }
   }
 
   // Initialize cue index
@@ -861,7 +868,15 @@ function createOverlay(): void {
 function handleStorageChange(changes: Record<string, { newValue: unknown; oldValue: unknown }>): void {
   if (changes.settings) {
     settings = { ...settings, ...(changes.settings.newValue as Partial<Settings>) };
+    // Recreate detector with new settings
     detector = createDetector(settings);
+    // Apply substitution settings
+    if (settings.useSubstitutions) {
+      detector.setSubstitutions(true, settings.substitutionCategory);
+      if (settings.customSubstitutions && Object.keys(settings.customSubstitutions).length > 0) {
+        detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
+      }
+    }
   }
 }
 

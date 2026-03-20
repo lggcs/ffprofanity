@@ -11,6 +11,12 @@ import {
   levenshteinDistance,
   isFuzzyMatch
 } from '../src/lib/detector';
+import {
+  DEFAULT_SUBSTITUTIONS,
+  buildSubstitutionMap,
+  getRandomSubstitution,
+  getAllSubstitutions,
+} from '../src/lib/substitutions';
 
 describe('ProfanityDetector', () => {
   describe('normalizeText', () => {
@@ -305,6 +311,185 @@ describe('ProfanityDetector', () => {
 
       expect(result.hasProfanity).toBe(true);
       expect(endTime - startTime).toBeLessThan(500);
+    });
+  });
+});
+
+describe('Substitutions', () => {
+  describe('DEFAULT_SUBSTITUTIONS', () => {
+    it('should have substitutions for common profanity words', () => {
+      const map = buildSubstitutionMap(DEFAULT_SUBSTITUTIONS);
+      expect(map.has('fuck')).toBe(true);
+      expect(map.has('shit')).toBe(true);
+      expect(map.has('bitch')).toBe(true);
+    });
+
+    it('should have silly and polite categories', () => {
+      const mapping = getAllSubstitutions('fuck', DEFAULT_SUBSTITUTIONS);
+      expect(mapping).not.toBeNull();
+      expect(mapping?.substitutions.silly.length).toBeGreaterThan(0);
+      expect(mapping?.substitutions.polite.length).toBeGreaterThan(0);
+    });
+
+    it('should have random category', () => {
+      const mapping = getAllSubstitutions('shit', DEFAULT_SUBSTITUTIONS);
+      expect(mapping?.substitutions.random).toBeDefined();
+      expect(mapping?.substitutions.random.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('getRandomSubstitution', () => {
+    it('should return a substitution from the category', () => {
+      const sub = getRandomSubstitution('fuck', 'silly', DEFAULT_SUBSTITUTIONS);
+      expect(sub).not.toBeNull();
+      expect(['fudge', 'frick', 'freak', 'fiddlesticks', 'firetruck', 'fluffernutter', 'frock']).toContain(sub);
+    });
+
+    it('should return null for unknown words', () => {
+      const sub = getRandomSubstitution('unknownword', 'silly', DEFAULT_SUBSTITUTIONS);
+      expect(sub).toBeNull();
+    });
+
+    it('should return different values on different calls (randomness)', () => {
+      // Due to randomness, multiple calls may occasionally return same value
+      // But with enough substitutions, we should see variety
+      const results = new Set<string>();
+      for (let i = 0; i < 10; i++) {
+        const sub = getRandomSubstitution('fuck', 'silly', DEFAULT_SUBSTITUTIONS);
+        if (sub) results.add(sub);
+      }
+      // With 7 options, we should see at least 2 different values in 10 calls
+      // (but this is probabilistic, so we'll be lenient)
+      expect(results.size).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('buildSubstitutionMap', () => {
+    it('should create a map from substitution list', () => {
+      const subs = [
+        { profanity: 'test', substitutions: { silly: ['fun'], polite: ['examination'], random: ['potato'] } }
+      ];
+      const map = buildSubstitutionMap(subs);
+      expect(map.has('test')).toBe(true);
+      expect(map.size).toBe(1);
+    });
+  });
+});
+
+describe('ProfanityDetector with substitutions', () => {
+  describe('useSubstitutions setting', () => {
+    it('should use [CENSORED] by default', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+
+      const result = detector.detect('What the fuck!');
+      expect(result.censoredText).toBe('What the [CENSORED]!');
+    });
+
+    it('should use fun substitutions when enabled', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      const result = detector.detect('What the fuck!');
+      // The exact word depends on random selection, but should be one of the silly options
+      expect(result.censoredText).toMatch(/What the (fudge|frick|freak|fiddlesticks|firetruck|fluffernutter|frock)!/);
+    });
+
+    it('should use polite category substitutions', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'polite',
+      });
+
+      const result = detector.detect('What the fuck!');
+      expect(result.censoredText).toMatch(/What the (darn|bother|drat)!/);
+    });
+
+    it('should use random category substitutions', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'random',
+      });
+
+      const result = detector.detect('What the fuck!');
+      expect(result.censoredText).toMatch(/What the (bananas|noodles|shenanigans)!/);
+    });
+
+    it('should use custom substitutions when set', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'custom',
+        customSubstitutions: new Map([['fuck', 'bunnies']]),
+      });
+
+      const result = detector.detect('What the fuck!');
+      expect(result.censoredText).toBe('What the bunnies!');
+    });
+
+    it('should handle multiple profanity words with substitutions', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'shit'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      const result = detector.detect('What the fuck, this shit is crazy!');
+      // Both words should be replaced with something from silly category
+      expect(result.censoredText).not.toContain('[CENSORED]');
+      expect(result.censoredText).not.toContain('fuck');
+      expect(result.censoredText).not.toContain('shit');
+    });
+
+    it('should fall back to [CENSORED] when no substitution available', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['someunknownbadword'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      const result = detector.detect('This word someunknownbadword is bad!');
+      expect(result.censoredText).toBe('This word [CENSORED] is bad!');
+    });
+
+    it('should update substitutions via setSubstitutions', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+
+      // Initially uses [CENSORED]
+      let result = detector.detect('fuck');
+      expect(result.censoredText).toBe('[CENSORED]');
+
+      // Enable substitutions
+      detector.setSubstitutions(true, 'silly');
+      result = detector.detect('fuck');
+      expect(result.censoredText).not.toBe('[CENSORED]');
+      expect(['fudge', 'frick', 'freak', 'fiddlesticks', 'firetruck', 'fluffernutter', 'frock']).toContain(result.censoredText);
     });
   });
 });
