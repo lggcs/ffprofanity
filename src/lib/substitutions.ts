@@ -287,7 +287,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     profanity: 'whore',
     substitutions: {
       silly: ['warlord', 'warthog', 'wombat', 'walrus', 'waffle'],
-      polite: ['promiscuous person', 'tramp'],
+      polite: ['jerk', 'meanie', 'rascal'],
       random: ['banana', 'noodle', 'potato'],
       monkeys: ['🙈', '🙉', '🙊'],
     },
@@ -298,7 +298,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     profanity: 'slut',
     substitutions: {
       silly: ['sloth', 'sloth-face', 'slug', 'slippers', 'slushie'],
-      polite: ['tramp', 'loose person'],
+      polite: ['jerk', 'meanie', 'rascal'],
       random: ['banana', 'noodle', 'potato'],
       monkeys: ['🙈', '🙉', '🙊'],
     },
@@ -342,7 +342,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     profanity: 'piss',
     substitutions: {
       silly: ['fizz', 'fuzzy', 'prune', 'peach', 'pixel', 'pickle'],
-      polite: ['pee', 'urinate'],
+      polite: ['pee', 'tinkle'],
       random: ['banana', 'noodle'],
       monkeys: ['🙈', '🙉', '🙊'],
     },
@@ -350,7 +350,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
   {
     profanity: 'pissed',
     substitutions: {
-      silly: ['ticked', 'miffed', 'fizzed', 'pickled', 'pruned'],
+      silly: ['ticked', 'miffed', 'fizzed', 'frazzled', 'flustered'],
       polite: ['angry', 'upset', 'annoyed'],
       random: ['bananas', 'noodly'],
       monkeys: ['🙈', '🙉', '🙊'],
@@ -373,7 +373,7 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     profanity: 'tits',
     substitutions: {
       silly: ['tips', 'toots', 'treats', 'twinkies', 'tater-tots'],
-      polite: ['breasts', 'bosom'],
+      polite: ['jerk', 'meanie', 'dummy'],
       random: ['bananas', 'noodles'],
       monkeys: ['🙈', '🙉', '🙊'],
     },
@@ -396,6 +396,25 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
       polite: ['friend', 'brother', 'person'],
       random: ['banana', 'potato'],
       monkeys: ['🙈', '🙉', '🙊'],
+    },
+  },
+  // Phrases
+  {
+    profanity: 'son of a bitch',
+    substitutions: {
+      silly: ['son of a biscuit', 'son of a gun', 'son of a sea biscuit', 'son of a sandwich'],
+      polite: ['rascal', 'scoundrel', 'jerk'],
+      random: ['child of a banana', 'offspring of spaghetti', 'heir of sunshine'],
+      monkeys: ['🙈 of a 🙉', 'son of a 🙊'],
+    },
+  },
+  {
+    profanity: 'swear to god',
+    substitutions: {
+      silly: ['promise on my popcorn', 'cross my heart', 'hope to sprout', 'swear on my sandwich', 'pinky swear'],
+      polite: ['I promise', 'I assure you', 'honestly', 'truly'],
+      random: ['I vow on a potato', 'may my noodles turn cold', 'by the power of pizza'],
+      monkeys: ['🙈 promise', '🙉 vow', '🙊 swear'],
     },
   },
 ];

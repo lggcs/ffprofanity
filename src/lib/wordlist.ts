@@ -135,6 +135,7 @@ export const DEFAULT_WORDLIST = [
   "son of a bitch",
   "spic",
   "spunk",
+  "swear to god",
   "suck",
   "sucked",
   "sucker",
