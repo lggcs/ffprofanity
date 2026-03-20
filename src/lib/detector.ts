@@ -17,6 +17,239 @@ import {
   type SubstitutionCategory,
   type SubstitutionMapping,
 } from './substitutions';
+import type { ProfanityWindow } from '../types';
+
+/**
+ * Count syllables in an English word using heuristic rules
+ */
+export function countSyllables(word: string): number {
+  if (!word || word.length === 0) return 0;
+  
+  word = word.toLowerCase().trim();
+  
+  // Special cases for common short words
+  if (word.length <= 2) return 1;
+  
+  // Remove non-alpha characters
+  const cleanWord = word.replace(/[^a-z]/g, '');
+  if (cleanWord.length === 0) return 1;
+  
+  // Vowel groups heuristic
+  const vowels = 'aeiouy';
+  let count = 0;
+  let prevWasVowel = false;
+  
+  for (const char of cleanWord) {
+    const isVowel = vowels.includes(char);
+    if (isVowel && !prevWasVowel) {
+      count++;
+    }
+    prevWasVowel = isVowel;
+  }
+  
+  // Adjust for silent 'e' at end
+  if (cleanWord.endsWith('e') && count > 1) {
+    count--;
+  }
+  
+  // Adjust for 'le' at end (like "table")
+  if (cleanWord.endsWith('le') && cleanWord.length > 2 && !vowels.includes(cleanWord[cleanWord.length - 3])) {
+    count++;
+  }
+  
+  // Adjust for 'ed' at end (often adds syllable only if preceded by t/d)
+  // "started" = 3, "worked" = 1
+  if (cleanWord.endsWith('ed') && !cleanWord.endsWith('ted') && !cleanWord.endsWith('ded')) {
+    // Usually silent, potentially reduce count
+    if (count > 1 && !cleanWord.endsWith('ied')) {
+      // ed is often silent, but tricky to handle
+    }
+  }
+  
+  // Ensure at least 1 syllable
+  return Math.max(1, count);
+}
+
+/**
+ * Count total syllables in a text
+ */
+export function countTotalSyllables(text: string): number {
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  return words.reduce((sum, word) => sum + countSyllables(word), 0);
+}
+
+/**
+ * Estimate word timing within a cue
+ * Uses syllable-based distribution
+ */
+export function estimateWordTiming(
+  cueStartMs: number,
+  cueEndMs: number,
+  cueText: string,
+  word: string,
+  wordStartIndex: number
+): { wordStartMs: number; wordEndMs: number } {
+  const words = cueText.split(/\s+/).filter(w => w.length > 0);
+  const totalSyllables = words.reduce((sum, w) => sum + countSyllables(w), 0);
+  
+  if (totalSyllables === 0) {
+    // Fallback to uniform distribution
+    const cueDuration = cueEndMs - cueStartMs;
+    const wordRatio = wordStartIndex / cueText.length;
+    const wordLength = word.length;
+    const duration = cueDuration;
+    return {
+      wordStartMs: cueStartMs + duration * wordRatio,
+      wordEndMs: cueStartMs + duration * (wordStartIndex + wordLength) / cueText.length
+    };
+  }
+  
+  const cueDuration = cueEndMs - cueStartMs;
+  const msPerSyllable = cueDuration / totalSyllables;
+  
+  // Calculate syllables before the target word
+  let syllablesBefore = 0;
+  let currentIndex = 0;
+  let foundWord = false;
+  
+  for (const w of words) {
+    // Find position of this word in the original text
+    const wordPos = cueText.toLowerCase().indexOf(w.toLowerCase(), currentIndex);
+    
+    if (!foundWord && wordPos === wordStartIndex) {
+      foundWord = true;
+      break;
+    }
+    
+    if (!foundWord) {
+      syllablesBefore += countSyllables(w);
+      currentIndex = wordPos + w.length;
+    }
+  }
+  
+  const targetSyllables = countSyllables(word);
+  
+  const wordStartMs = cueStartMs + (syllablesBefore * msPerSyllable);
+  const wordEndMs = wordStartMs + (targetSyllables * msPerSyllable);
+  
+  return { wordStartMs, wordEndMs };
+}
+
+/**
+ * Speaking rate calibration from a set of cues
+ */
+export interface SpeakingRateCalibration {
+  wpm: number;
+  msPerSyllable: number;
+  avgSyllablesPerWord: number;
+}
+
+/**
+ * Calibrate speaking rate from subtitle cues
+ */
+export function calibrateSpeakingRate(cues: Array<{ startMs: number; endMs: number; text: string }>): SpeakingRateCalibration {
+  let totalWords = 0;
+  let totalSyllables = 0;
+  let totalDurationMs = 0;
+  
+  for (const cue of cues) {
+    const words = cue.text.split(/\s+/).filter(w => w.length > 0);
+    totalWords += words.length;
+    totalSyllables += words.reduce((sum, w) => sum + countSyllables(w), 0);
+    totalDurationMs += (cue.endMs - cue.startMs);
+  }
+  
+  if (totalDurationMs === 0 || totalSyllables === 0) {
+    // Fallback to average speaking rate
+    return { wpm: 170, msPerSyllable: 175, avgSyllablesPerWord: 1.5 };
+  }
+  
+  const wpm = (totalWords / totalDurationMs) * 60000;
+  const msPerSyllable = totalDurationMs / totalSyllables;
+  const avgSyllablesPerWord = totalSyllables / totalWords;
+  
+  return { wpm, msPerSyllable, avgSyllablesPerWord };
+}
+
+/**
+ * Compute profanity muting windows for a cue
+ */
+export function computeProfanityWindows(
+  cueId: number,
+  cueStartMs: number,
+  cueEndMs: number,
+  cueText: string,
+  matches: Array<{ word: string; startIndex: number; endIndex: number }>,
+  sensitivity: 'low' | 'medium' | 'high'
+): ProfanityWindow[] {
+  if (matches.length === 0 || sensitivity === 'high') {
+    return [];
+  }
+  
+  // Buffer settings based on sensitivity
+  const bufferSettings = {
+    low: { before: 50, after: 50 },      // Minimal buffer
+    medium: { before: 150, after: 100 },  // Moderate buffer
+    high: { before: 200, after: 50 }      // Not used, but defined for completeness
+  };
+  
+  const buffer = bufferSettings[sensitivity];
+  const windows: ProfanityWindow[] = [];
+  
+  for (const match of matches) {
+    const { wordStartMs, wordEndMs } = estimateWordTiming(
+      cueStartMs, cueEndMs, cueText, match.word, match.startIndex
+    );
+    
+    const window: ProfanityWindow = {
+      cueId,
+      word: match.word,
+      startMs: Math.max(cueStartMs, wordStartMs - buffer.before),
+      endMs: Math.min(cueEndMs, wordEndMs + buffer.after),
+      wordStartMs,
+      wordEndMs,
+      bufferBeforeMs: buffer.before,
+      bufferAfterMs: buffer.after
+    };
+    
+    windows.push(window);
+  }
+  
+  return windows;
+}
+
+// Religious terms whitelist for low sensitivity mode
+// These words are allowed through when sensitivity is 'low'
+export const RELIGIOUS_WHITELIST = new Set([
+  'god',
+  'gods',
+  'hell',
+  'jesus',
+  'christ',
+  'christian',
+  'christianity',
+  'damn',
+  'damned',
+  'damnation',
+  'lord',
+  'bless',
+  'blessed',
+  'blessing',
+  'bible',
+  'prayer',
+  'prayers',
+  'pray',
+  'praying',
+  'heaven',
+  'heavens',
+  'holy',
+  'saint',
+  'saints',
+  'angel',
+  'angels',
+  'devil',
+  'satan',
+]);
 
 // Character substitutions used to bypass filters
 const SUBSTITUTIONS: Record<string, string> = {
@@ -154,6 +387,7 @@ export class ProfanityDetector {
   private wordlistArray: string[];
   private fuzzyThreshold: number;
   private sensitivityThreshold: number;
+  private sensitivity: 'low' | 'medium' | 'high';
   private customPatterns: { pattern: RegExp; word: string }[];
   private useFuzzyMatching: boolean;
   private useContextFiltering: boolean;
@@ -179,6 +413,7 @@ export class ProfanityDetector {
     this.wordlistArray = Array.from(this.wordlist);
     this.fuzzyThreshold = fullConfig.fuzzyThreshold;
     this.sensitivityThreshold = SENSITIVITY_THRESHOLDS[fullConfig.sensitivity];
+    this.sensitivity = fullConfig.sensitivity;
     this.customPatterns = [...OBFUSCATION_PATTERNS];
     this.useFuzzyMatching = fullConfig.useFuzzyMatching;
     this.useContextFiltering = fullConfig.useContextFiltering;
@@ -220,6 +455,14 @@ export class ProfanityDetector {
    */
   setSensitivity(sensitivity: 'low' | 'medium' | 'high'): void {
     this.sensitivityThreshold = SENSITIVITY_THRESHOLDS[sensitivity];
+    this.sensitivity = sensitivity;
+  }
+
+  /**
+   * Get current sensitivity setting
+   */
+  getSensitivity(): 'low' | 'medium' | 'high' {
+    return this.sensitivity;
   }
 
   /**
@@ -311,17 +554,22 @@ export class ProfanityDetector {
    */
   detect(text: string): DetectionResult {
     const matches: ProfanityMatch[] = [];
-    
+
     // Check obfuscation patterns first
     for (const { pattern, word } of this.customPatterns) {
       let match;
       const regex = new RegExp(pattern.source, 'gi');
       while ((match = regex.exec(text)) !== null) {
+        // Skip religious whitelist words when sensitivity is 'low'
+        if (this.sensitivity === 'low' && RELIGIOUS_WHITELIST.has(normalizeText(word))) {
+          continue;
+        }
+
         // Check context for regex matches too
         if (this.useContextFiltering && isAllowedInContext(word, text, match.index, match.index + match[0].length)) {
           continue; // Skip this match
         }
-        
+
         matches.push({
           word: match[0],
           startIndex: match.index,
@@ -344,6 +592,12 @@ export class ProfanityDetector {
       const { match, type, confidence } = this.checkWord(token);
 
       if (match) {
+        // Skip religious whitelist words when sensitivity is 'low'
+        if (this.sensitivity === 'low' && RELIGIOUS_WHITELIST.has(normalizeText(token))) {
+          searchIndex = tokenIndex + token.length;
+          continue;
+        }
+
         // Avoid duplicate matches
         const alreadyMatched = matches.some(
           m => (tokenIndex >= m.startIndex && tokenIndex < m.endIndex) ||
@@ -354,7 +608,7 @@ export class ProfanityDetector {
           // Check context if enabled
           let finalConfidence = confidence;
           let contextAllowed = false;
-          
+
           if (this.useContextFiltering) {
             contextAllowed = isAllowedInContext(token, text, tokenIndex, tokenIndex + token.length);
             if (contextAllowed) {

@@ -5,12 +5,12 @@
 
 import { storage } from '../lib/storage';
 import { parseSubtitle, sanitizeText } from '../lib/parser';
-import { ProfanityDetector, createDetector } from '../lib/detector';
+import { ProfanityDetector, createDetector, computeProfanityWindows } from '../lib/detector';
 import { CueIndex } from '../lib/cueIndex';
 import { selectBestTrack, formatTrackLabel, createTrackFromUser } from '../lib/tracks';
 import { scanPageForTracks, extractFromPageScripts, watchForVideoTracks } from '../lib/extractor';
 import { getAllMatchingExtractors, extractLanguageFromUrl, isSubtitleUrl } from '../extractors';
-import type { Cue, Settings, DetectionResult, SubtitleTrack } from '../types';
+import type { Cue, Settings, SubtitleTrack } from '../types';
 
 // State
 let cues: Cue[] = [];
@@ -867,15 +867,37 @@ function createOverlay(): void {
  */
 function handleStorageChange(changes: Record<string, { newValue: unknown; oldValue: unknown }>): void {
   if (changes.settings) {
+    const oldSettings = settings;
     settings = { ...settings, ...(changes.settings.newValue as Partial<Settings>) };
+    
     // Recreate detector with new settings
     detector = createDetector(settings);
+    
     // Apply substitution settings
     if (settings.useSubstitutions) {
       detector.setSubstitutions(true, settings.substitutionCategory);
       if (settings.customSubstitutions && Object.keys(settings.customSubstitutions).length > 0) {
         detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
       }
+    }
+    
+    // Re-compute profanity windows if sensitivity changed
+    if (oldSettings.sensitivity !== settings.sensitivity) {
+      console.log(`[FFProfanity] Sensitivity changed from ${oldSettings.sensitivity} to ${settings.sensitivity}, re-computing windows`);
+      for (const cue of cues) {
+        if (cue.hasProfanity && cue.profanityMatches.length > 0) {
+          cue.profanityWindows = computeProfanityWindows(
+            cue.id,
+            cue.startMs,
+            cue.endMs,
+            cue.text,
+            cue.profanityMatches,
+            settings.sensitivity
+          );
+        }
+      }
+      // Rebuild index with updated cues
+      cueIndex.build(cues);
     }
   }
 }
@@ -1003,7 +1025,7 @@ async function handleSubtitleUpload(content: string, filename?: string): Promise
 function processCues(newCues: Cue[]): void {
   cues = newCues.map(cue => {
     const detection = detector.detect(cue.text);
-    
+
     // Debug: log any cue containing "bullshit"
     if (cue.text.toLowerCase().includes('bullshit')) {
       console.log(`[FFProfanity] DEBUG bullshit cue ${cue.id}:`, {
@@ -1014,14 +1036,28 @@ function processCues(newCues: Cue[]): void {
         censoredText: detection.censoredText
       });
     }
-    
-    return {
+
+    const processedCue: Cue = {
       ...cue,
       censoredText: detection.censoredText,
       hasProfanity: detection.hasProfanity,
       profanityScore: detection.score,
       profanityMatches: detection.matches,
     };
+
+    // Compute profanity windows for medium/low sensitivity modes
+    if (detection.hasProfanity && settings.sensitivity !== 'high') {
+      processedCue.profanityWindows = computeProfanityWindows(
+        cue.id,
+        cue.startMs,
+        cue.endMs,
+        cue.text,
+        detection.matches,
+        settings.sensitivity
+      );
+    }
+
+    return processedCue;
   });
 
   // Build index for fast lookup
@@ -1030,6 +1066,10 @@ function processCues(newCues: Cue[]): void {
   // Log summary
   const profanityCues = cues.filter(c => c.hasProfanity);
   console.log(`[FFProfanity] Processed ${cues.length} cues, ${profanityCues.length} with profanity`);
+  if (settings.sensitivity !== 'high' && profanityCues.length > 0) {
+    const windowCount = profanityCues.reduce((sum, c) => sum + (c.profanityWindows?.length || 0), 0);
+    console.log(`[FFProfanity] Computed ${windowCount} profanity windows for sensitivity '${settings.sensitivity}'`);
+  }
 
   // Log first few profanity cues for verification (with timestamps)
   if (profanityCues.length > 0) {
@@ -1038,7 +1078,8 @@ function processCues(newCues: Cue[]): void {
         id: c.id,
         time: `${Math.floor(c.startMs / 60000)}:${Math.floor((c.startMs % 60000) / 1000).toString().padStart(2, '0')}`,
         text: c.text.substring(0, 40),
-        hasProfanity: c.hasProfanity
+        hasProfanity: c.hasProfanity,
+        windows: c.profanityWindows?.length || 0
       }))
     );
   }
@@ -1128,16 +1169,18 @@ function updatePlayback(currentTimeMs: number): void {
 
   // Find current subtitle cue and profanity status
   const currentCue = cueIndex.findActive(currentTimeMs, settings.offsetMs);
-  const profanityCue = cueIndex.findProfanityCue(currentTimeMs, settings.offsetMs);
   const nextCues = cueIndex.getNextCues(currentTimeMs, 3, settings.offsetMs);
 
-  // Handle muting: use profanity-specific check with pre-mute buffer
-  if (profanityCue && !isMuted) {
-    // Entering a profanity cue (with MUTE_ADVANCE_MS buffer already applied)
-    currentProfanityCue = profanityCue;
+  // Handle muting based on sensitivity setting
+  // HIGH: mute entire cue, MEDIUM/LOW: mute only profanity word windows
+  const muteState = cueIndex.getMuteState(currentTimeMs, settings.offsetMs, settings.sensitivity);
+  
+  if (muteState.shouldMute && !isMuted) {
+    // Entering a profanity zone
+    currentProfanityCue = muteState.cue;
     sendMuteNow();
-  } else if (!profanityCue && isMuted) {
-    // Leaving the profanity zone (with MUTE_DELAY_MS buffer applied)
+  } else if (!muteState.shouldMute && isMuted) {
+    // Leaving the profanity zone
     sendUnmuteNow();
     currentProfanityCue = null;
   }

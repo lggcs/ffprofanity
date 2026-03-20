@@ -9,7 +9,13 @@ import {
   normalizeText,
   tokenize,
   levenshteinDistance,
-  isFuzzyMatch
+  isFuzzyMatch,
+  countSyllables,
+  countTotalSyllables,
+  estimateWordTiming,
+  calibrateSpeakingRate,
+  computeProfanityWindows,
+  RELIGIOUS_WHITELIST,
 } from '../src/lib/detector';
 import {
   DEFAULT_SUBSTITUTIONS,
@@ -490,6 +496,336 @@ describe('ProfanityDetector with substitutions', () => {
       result = detector.detect('fuck');
       expect(result.censoredText).not.toBe('[CENSORED]');
       expect(['fudge', 'frick', 'freak', 'fiddlesticks', 'firetruck', 'fluffernutter', 'frock']).toContain(result.censoredText);
+    });
+  });
+});
+
+describe('Syllable Counting', () => {
+  describe('countSyllables', () => {
+    it('should count syllables in single-syllable words', () => {
+      expect(countSyllables('the')).toBe(1);
+      expect(countSyllables('a')).toBe(1);
+      expect(countSyllables('cat')).toBe(1);
+      expect(countSyllables('dog')).toBe(1);
+      expect(countSyllables('shit')).toBe(1);
+      expect(countSyllables('fuck')).toBe(1);
+    });
+
+    it('should count syllables in multi-syllable words', () => {
+      expect(countSyllables('apple')).toBe(2);
+      expect(countSyllables('banana')).toBe(3);
+      expect(countSyllables('hello')).toBe(2);
+      expect(countSyllables('fucking')).toBe(2);
+      expect(countSyllables('asshole')).toBe(2);
+      expect(countSyllables('bitch')).toBe(1); // Actually 1
+    });
+
+    it('should handle silent e', () => {
+      expect(countSyllables('make')).toBe(1);
+      expect(countSyllables('time')).toBe(1);
+      expect(countSyllables('like')).toBe(1);
+      // These are heuristic-based and work for most common words
+      // 'create' has 2 syllables: cre-ate, but our heuristic may count differently
+      // The heuristic is designed for speech timing, not perfect accuracy
+    });
+
+    it('should handle empty and edge cases', () => {
+      expect(countSyllables('')).toBe(0);
+      expect(countSyllables('a')).toBe(1);
+      expect(countSyllables('I')).toBe(1);
+    });
+
+    it('should handle complex words', () => {
+      // These are heuristic and may not be perfect
+      expect(countSyllables('profanity')).toBeGreaterThanOrEqual(3);
+      expect(countSyllables('subtitle')).toBeGreaterThanOrEqual(2);
+      expect(countSyllables('motherfucker')).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  describe('countTotalSyllables', () => {
+    it('should count total syllables in text', () => {
+      expect(countTotalSyllables('hello world')).toBe(3);
+      expect(countTotalSyllables('what the fuck')).toBe(3);
+      expect(countTotalSyllables('this is a test')).toBe(4);
+    });
+
+    it('should handle empty text', () => {
+      expect(countTotalSyllables('')).toBe(0);
+    });
+  });
+});
+
+describe('Word Timing Estimation', () => {
+  describe('estimateWordTiming', () => {
+    it('should estimate word timing based on syllables', () => {
+      // Cue: "what the fuck" (3 syllables total: what=1, the=1, fuck=1)
+      // Duration: 2000ms (0-2000)
+      // "fuck" is at position 9 (after "what the ")
+      // Syllables before "fuck": 2 (what + the)
+      // So "fuck" should start around 2/3 of the cue
+      
+      const timing = estimateWordTiming(0, 2000, 'what the fuck', 'fuck', 9);
+      
+      // Word should be within cue bounds
+      expect(timing.wordStartMs).toBeGreaterThan(0);
+      expect(timing.wordEndMs).toBeGreaterThan(timing.wordStartMs);
+      // "fuck" is the last word, so it should end at or near the cue end
+      expect(timing.wordEndMs).toBeLessThanOrEqual(2000);
+    });
+
+    it('should handle single-word cue', () => {
+      const timing = estimateWordTiming(0, 1000, 'fuck', 'fuck', 0);
+      expect(timing.wordStartMs).toBe(0);
+      expect(timing.wordEndMs).toBe(1000);
+    });
+
+    it('should handle first word in cue', () => {
+      const timing = estimateWordTiming(0, 3000, 'hello world how are you', 'hello', 0);
+      // "hello" is first word, should start near 0
+      expect(timing.wordStartMs).toBeLessThan(500);
+    });
+
+    it('should handle last word in cue', () => {
+      const timing = estimateWordTiming(0, 3000, 'hello world how are you', 'you', 20);
+      // "you" is last word, should end near cue end
+      expect(timing.wordEndMs).toBeGreaterThan(2500);
+    });
+  });
+
+  describe('calibrateSpeakingRate', () => {
+    it('should calibrate from cue data', () => {
+      const cues = [
+        { startMs: 0, endMs: 2000, text: 'hello world' },
+        { startMs: 2000, endMs: 5000, text: 'this is a test sentence' },
+      ];
+      
+      const calibration = calibrateSpeakingRate(cues);
+      
+      expect(calibration.wpm).toBeGreaterThan(0);
+      expect(calibration.msPerSyllable).toBeGreaterThan(0);
+      expect(calibration.avgSyllablesPerWord).toBeGreaterThan(0);
+    });
+
+    it('should return fallback for empty cues', () => {
+      const calibration = calibrateSpeakingRate([]);
+      
+      expect(calibration.wpm).toBe(170);
+      expect(calibration.msPerSyllable).toBe(175);
+    });
+  });
+});
+
+describe('Profanity Windows', () => {
+  describe('computeProfanityWindows', () => {
+    it('should compute windows for medium sensitivity', () => {
+      const windows = computeProfanityWindows(
+        1, // cueId
+        0, // startMs
+        2000, // endMs
+        'what the fuck is this', // text
+        [{ word: 'fuck', startIndex: 8, endIndex: 12 }], // matches
+        'medium' // sensitivity
+      );
+      
+      expect(windows.length).toBe(1);
+      expect(windows[0].cueId).toBe(1);
+      expect(windows[0].word).toBe('fuck');
+      expect(windows[0].bufferBeforeMs).toBe(150); // medium
+      expect(windows[0].bufferAfterMs).toBe(100); // medium
+    });
+
+    it('should compute windows for low sensitivity with smaller buffers', () => {
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        2000,
+        'what the fuck is this',
+        [{ word: 'fuck', startIndex: 8, endIndex: 12 }],
+        'low'
+      );
+      
+      expect(windows.length).toBe(1);
+      expect(windows[0].bufferBeforeMs).toBe(50); // low
+      expect(windows[0].bufferAfterMs).toBe(50); // low
+    });
+
+    it('should return empty array for high sensitivity', () => {
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        2000,
+        'what the fuck is this',
+        [{ word: 'fuck', startIndex: 8, endIndex: 12 }],
+        'high'
+      );
+      
+      expect(windows).toEqual([]);
+    });
+
+    it('should return empty array for no matches', () => {
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        2000,
+        'hello world',
+        [],
+        'medium'
+      );
+      
+      expect(windows).toEqual([]);
+    });
+
+    it('should handle multiple profanity words', () => {
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        3000,
+        'what the fuck is this shit',
+        [
+          { word: 'fuck', startIndex: 8, endIndex: 12 },
+          { word: 'shit', startIndex: 21, endIndex: 25 }
+        ],
+        'medium'
+      );
+      
+      expect(windows.length).toBe(2);
+      expect(windows[0].word).toBe('fuck');
+      expect(windows[1].word).toBe('shit');
+    });
+
+    it('should clamp windows to cue boundaries', () => {
+      const windows = computeProfanityWindows(
+        1,
+        1000, // startMs
+        2000, // endMs
+        'fuck', // profanity at the very start
+        [{ word: 'fuck', startIndex: 0, endIndex: 4 }],
+        'medium'
+      );
+      
+      // Window should be clamped to cue boundaries
+      expect(windows[0].startMs).toBeGreaterThanOrEqual(1000);
+      expect(windows[0].endMs).toBeLessThanOrEqual(2000);
+    });
+  });
+});
+
+describe('Religious Whitelist', () => {
+  describe('RELIGIOUS_WHITELIST', () => {
+    it('should contain expected religious terms', () => {
+      expect(RELIGIOUS_WHITELIST.has('god')).toBe(true);
+      expect(RELIGIOUS_WHITELIST.has('hell')).toBe(true);
+      expect(RELIGIOUS_WHITELIST.has('jesus')).toBe(true);
+      expect(RELIGIOUS_WHITELIST.has('christ')).toBe(true);
+      expect(RELIGIOUS_WHITELIST.has('damn')).toBe(true);
+      expect(RELIGIOUS_WHITELIST.has('damned')).toBe(true);
+    });
+  });
+
+  describe('Low sensitivity mode', () => {
+    it('should allow religious terms through in low sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['damn', 'hell', 'god'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+
+      // These should NOT be detected as profanity in low mode
+      expect(detector.detect('Oh my god').hasProfanity).toBe(false);
+      expect(detector.detect('What the hell').hasProfanity).toBe(false);
+      expect(detector.detect('Damn it').hasProfanity).toBe(false);
+      expect(detector.detect('Jesus Christ').hasProfanity).toBe(false);
+    });
+
+    it('should still detect profanity words in low sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'shit', 'bitch', 'damn', 'hell'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+
+      // These should still be detected
+      expect(detector.detect('What the fuck').hasProfanity).toBe(true);
+      expect(detector.detect('This is shit').hasProfanity).toBe(true);
+      expect(detector.detect('You bitch').hasProfanity).toBe(true);
+    });
+
+    it('should block religious terms in medium sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['damn', 'hell', 'god'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+
+      // These SHOULD be detected as profanity in medium mode (no whitelist)
+      expect(detector.detect('Oh my god').hasProfanity).toBe(true);
+      expect(detector.detect('What the hell').hasProfanity).toBe(true);
+      expect(detector.detect('Damn it').hasProfanity).toBe(true);
+    });
+
+    it('should block religious terms in high sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['damn', 'hell', 'god'],
+        sensitivity: 'high',
+        useContextFiltering: false,
+      });
+
+      // These SHOULD be detected in high mode
+      expect(detector.detect('Oh my god').hasProfanity).toBe(true);
+      expect(detector.detect('What the hell').hasProfanity).toBe(true);
+      expect(detector.detect('Damn it').hasProfanity).toBe(true);
+    });
+
+    it('should allow mixed sentences with religious terms', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'shit', 'damn', 'hell'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+
+      // "damn" should be allowed, "fuck" should be censored
+      const result = detector.detect('Damn, what the fuck is this');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.length).toBe(1);
+      expect(result.matches[0].word.toLowerCase()).toBe('fuck');
+    });
+
+    it('should handle case variations of religious terms', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['god', 'hell', 'damn'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+
+      expect(detector.detect('Oh my God').hasProfanity).toBe(false);
+      expect(detector.detect('GOD Almighty').hasProfanity).toBe(false);
+      expect(detector.detect('GoD').hasProfanity).toBe(false);
+      expect(detector.detect('HELL no').hasProfanity).toBe(false);
+      expect(detector.detect('DAMN right').hasProfanity).toBe(false);
+    });
+
+    it('should update whitelist behavior when sensitivity changes', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['damn', 'hell'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+
+      // Initially allowed in low mode
+      expect(detector.detect('Damn it').hasProfanity).toBe(false);
+
+      // Change to medium
+      detector.setSensitivity('medium');
+
+      // Now should be blocked
+      expect(detector.detect('Damn it').hasProfanity).toBe(true);
+
+      // Change back to low
+      detector.setSensitivity('low');
+
+      // Allowed again
+      expect(detector.detect('Damn it').hasProfanity).toBe(false);
     });
   });
 });

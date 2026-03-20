@@ -3,7 +3,7 @@
  * Uses interval tree-like structure for efficient time-based queries
  */
 
-import type { Cue } from '../types';
+import type { Cue, ProfanityWindow } from '../types';
 
 interface CueNode {
   cue: Cue;
@@ -20,6 +20,7 @@ export class CueIndex {
   private cues: Cue[] = [];
   private sortedByStart: CueNode[] = [];
   private profanityCues: CueNode[] = []; // Sorted list of profanity-only cues
+  private profanityWindows: ProfanityWindow[] = []; // Flat list of all windows
 
   /**
    * Build index from cue list
@@ -35,6 +36,16 @@ export class CueIndex {
       .filter(cue => cue.hasProfanity)
       .map(cue => ({ cue, start: cue.startMs, end: cue.endMs }))
       .sort((a, b) => a.start - b.start);
+
+    // Build flat list of all profanity windows for medium/low sensitivity
+    this.profanityWindows = [];
+    for (const cue of cues) {
+      if (cue.profanityWindows && cue.profanityWindows.length > 0) {
+        this.profanityWindows.push(...cue.profanityWindows);
+      }
+    }
+    // Sort by start time
+    this.profanityWindows.sort((a, b) => a.startMs - b.startMs);
   }
   
   /**
@@ -126,6 +137,7 @@ export class CueIndex {
     this.cues = [];
     this.sortedByStart = [];
     this.profanityCues = [];
+    this.profanityWindows = [];
   }
 
   /**
@@ -138,6 +150,7 @@ export class CueIndex {
   /**
    * Find profanity cue at given timestamp with pre-mute buffer
    * Returns the profanity cue if we should be muted, null otherwise
+   * This is the HIGH sensitivity mode - mutes entire cue
    */
   findProfanityCue(timestampMs: number, offsetMs: number = 0): Cue | null {
     const adjustedTime = timestampMs + offsetMs;
@@ -172,11 +185,71 @@ export class CueIndex {
   }
 
   /**
-   * Check if we should be muted at the given timestamp
-   * Returns true if within MUTE_ADVANCE_MS of a profanity cue or inside one
+   * Find profanity window at given timestamp
+   * This is used for MEDIUM and LOW sensitivity modes - mutes only the word
+   * Returns the profanity window if we should be muted, null otherwise
    */
-  shouldMute(timestampMs: number, offsetMs: number = 0): boolean {
-    return this.findProfanityCue(timestampMs, offsetMs) !== null;
+  findProfanityWindow(timestampMs: number, offsetMs: number = 0): ProfanityWindow | null {
+    const adjustedTime = timestampMs + offsetMs;
+
+    // Binary search through profanity windows
+    let low = 0;
+    let high = this.profanityWindows.length - 1;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const window = this.profanityWindows[mid];
+
+      // Check if we're within this window
+      if (adjustedTime >= window.startMs && adjustedTime <= window.endMs) {
+        return window;
+      }
+
+      // Adjust search range
+      if (adjustedTime < window.startMs) {
+        // We're before this window, search earlier
+        high = mid - 1;
+      } else {
+        // We're after this window, search later
+        low = mid + 1;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if we should be muted at the given timestamp
+   * sensitivity: 'high' = mute entire cue, 'medium'/'low' = mute word windows
+   */
+  shouldMute(timestampMs: number, offsetMs: number = 0, sensitivity: 'low' | 'medium' | 'high' = 'high'): boolean {
+    if (sensitivity === 'high') {
+      return this.findProfanityCue(timestampMs, offsetMs) !== null;
+    } else {
+      return this.findProfanityWindow(timestampMs, offsetMs) !== null;
+    }
+  }
+
+  /**
+   * Get the mute state for the current timestamp
+   * Returns: { shouldMute: boolean, window: ProfanityWindow | null, cue: Cue | null }
+   */
+  getMuteState(timestampMs: number, offsetMs: number = 0, sensitivity: 'low' | 'medium' | 'high' = 'high'): {
+    shouldMute: boolean;
+    window: ProfanityWindow | null;
+    cue: Cue | null;
+  } {
+    if (sensitivity === 'high') {
+      const cue = this.findProfanityCue(timestampMs, offsetMs);
+      return { shouldMute: cue !== null, window: null, cue };
+    } else {
+      const window = this.findProfanityWindow(timestampMs, offsetMs);
+      if (window) {
+        const cue = this.cues.find(c => c.id === window.cueId) || null;
+        return { shouldMute: true, window, cue };
+      }
+      return { shouldMute: false, window: null, cue: null };
+    }
   }
 
   /**
@@ -193,6 +266,25 @@ export class CueIndex {
       }
       // Early exit
       if (node.start > endTime) break;
+    }
+
+    return upcoming;
+  }
+
+  /**
+   * Get upcoming profanity windows (for medium/low sensitivity)
+   */
+  getUpcomingProfanityWindows(timestampMs: number, lookaheadMs: number, offsetMs: number = 0): ProfanityWindow[] {
+    const adjustedTime = timestampMs + offsetMs;
+    const endTime = adjustedTime + lookaheadMs;
+    const upcoming: ProfanityWindow[] = [];
+
+    for (const window of this.profanityWindows) {
+      if (window.startMs >= adjustedTime && window.startMs <= endTime) {
+        upcoming.push(window);
+      }
+      // Early exit
+      if (window.startMs > endTime) break;
     }
 
     return upcoming;

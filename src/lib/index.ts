@@ -3,7 +3,21 @@
  */
 
 export { parseSubtitle, parseSRT, parseVTT, parseASS, detectFormat, sanitizeText } from './parser';
-export { ProfanityDetector, createDetector, normalizeText, tokenize, levenshteinDistance, isFuzzyMatch } from './detector';
+export {
+  ProfanityDetector,
+  createDetector,
+  normalizeText,
+  tokenize,
+  levenshteinDistance,
+  isFuzzyMatch,
+  countSyllables,
+  countTotalSyllables,
+  estimateWordTiming,
+  calibrateSpeakingRate,
+  computeProfanityWindows,
+  RELIGIOUS_WHITELIST,
+  type SpeakingRateCalibration,
+} from './detector';
 export { StorageManager, storage } from './storage';
 export { CueIndex } from './cueIndex';
 export {

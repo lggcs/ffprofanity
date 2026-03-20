@@ -12,6 +12,7 @@ export interface Cue {
   hasProfanity: boolean;
   profanityScore: number;
   profanityMatches: ProfanityMatch[];
+  profanityWindows?: ProfanityWindow[];  // Pre-computed muting windows for medium/low sensitivity
 }
 
 // Profanity match in text
@@ -21,6 +22,18 @@ export interface ProfanityMatch {
   endIndex: number;
   type: 'exact' | 'regex' | 'fuzzy';
   confidence: number;
+}
+
+// Profanity muting window for precise muting
+export interface ProfanityWindow {
+  cueId: number;
+  word: string;
+  startMs: number;     // Estimated profanity word start (with buffer)
+  endMs: number;        // Estimated profanity word end (with buffer)
+  wordStartMs: number;  // Actual estimated word start (no buffer)
+  wordEndMs: number;    // Actual estimated word end (no buffer)
+  bufferBeforeMs: number;
+  bufferAfterMs: number;
 }
 
 // Subtitle track detected from streaming site or video element
