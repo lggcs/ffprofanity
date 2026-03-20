@@ -142,7 +142,6 @@ export const DEFAULT_WORDLIST = [
   "sucker",
   "sucks",
   "sucking",
-  "swear to god",
   "tit",
   "tits",
   "titties",
