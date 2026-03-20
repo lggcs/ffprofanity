@@ -67,6 +67,7 @@ export interface NetworkSubtitle {
 
 // Settings stored in browser storage
 export interface Settings {
+  enabled: boolean;              // Global on/off switch for the extension
   offsetMs: number;
   sensitivity: 'low' | 'medium' | 'high';
   fuzzyThreshold: number;

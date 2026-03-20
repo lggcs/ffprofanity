@@ -8,6 +8,7 @@ import type { Cue, Settings, StorageSchema, SubtitleTrack } from '../types';
 const CURRENT_SCHEMA_VERSION = 1;
 
 const DEFAULT_SETTINGS: Settings = {
+  enabled: true,  // Extension starts enabled by default
   offsetMs: 0,
   sensitivity: 'medium',
   fuzzyThreshold: 0.25,
