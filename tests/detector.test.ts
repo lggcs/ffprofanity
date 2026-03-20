@@ -96,7 +96,7 @@ describe('ProfanityDetector', () => {
 
   describe('detect', () => {
     const detector = new ProfanityDetector({
-      wordlist: ['fuck', 'shit', 'ass', 'bitch', 'bullshit'],
+      wordlist: ['fuck', 'shit', 'ass', 'bitch', 'bullshit', 'swear to god', 'son of a bitch'],
       fuzzyThreshold: 0.25,
       sensitivity: 'medium',
       useFuzzyMatching: true,
@@ -162,6 +162,31 @@ describe('ProfanityDetector', () => {
       const result = detector.detect('bullshit');
       expect(result.hasProfanity).toBe(true);
       expect(result.censoredText).toBe('[CENSORED]');
+    });
+
+    it('should detect multi-word phrases', () => {
+      const result = detector.detect('I swear to god that happened!');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.length).toBe(1);
+      expect(result.matches[0].word.toLowerCase()).toBe('swear to god');
+      expect(result.censoredText).toContain('[CENSORED]');
+    });
+
+    it('should detect phrase and not individual words separately', () => {
+      const result = detector.detect('SWEAR TO GOD!');
+      expect(result.hasProfanity).toBe(true);
+      // Should match the phrase, not "god" separately
+      expect(result.matches.length).toBe(1);
+      expect(result.matches[0].word.toLowerCase()).toBe('swear to god');
+    });
+
+    it('should detect son of a bitch phrase', () => {
+      const result = detector.detect('You son of a bitch!');
+      expect(result.hasProfanity).toBe(true);
+      // Should match the phrase "son of a bitch", not "bitch" separately
+      // The phrase match covers "bitch" so it should not be double-counted
+      expect(result.matches.length).toBe(1);
+      expect(result.matches[0].word.toLowerCase()).toBe('son of a bitch');
     });
   });
 

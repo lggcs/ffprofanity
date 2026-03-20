@@ -387,6 +387,7 @@ export function isFuzzyMatch(word: string, profanityWord: string, threshold: num
 export class ProfanityDetector {
   private wordlist: Set<string>;
   private wordlistArray: string[];
+  private phrases: string[];  // Multi-word phrases
   private fuzzyThreshold: number;
   private sensitivityThreshold: number;
   private sensitivity: 'low' | 'medium' | 'high';
@@ -413,6 +414,10 @@ export class ProfanityDetector {
     };
     this.wordlist = new Set(fullConfig.wordlist.map(w => normalizeText(w)));
     this.wordlistArray = Array.from(this.wordlist);
+    // Extract multi-word phrases (contain spaces)
+    this.phrases = fullConfig.wordlist
+      .filter(w => w.includes(' '))
+      .map(w => normalizeText(w));
     this.fuzzyThreshold = fullConfig.fuzzyThreshold;
     this.sensitivityThreshold = SENSITIVITY_THRESHOLDS[fullConfig.sensitivity];
     this.sensitivity = fullConfig.sensitivity;
@@ -431,6 +436,10 @@ export class ProfanityDetector {
   addWords(words: string[]): void {
     for (const word of words) {
       this.wordlist.add(normalizeText(word));
+      // Also track phrases
+      if (word.includes(' ')) {
+        this.phrases.push(normalizeText(word));
+      }
     }
     this.wordlistArray = Array.from(this.wordlist);
   }
@@ -441,6 +450,9 @@ export class ProfanityDetector {
   removeWords(words: string[]): void {
     for (const word of words) {
       this.wordlist.delete(normalizeText(word));
+      // Also remove from phrases
+      const normalized = normalizeText(word);
+      this.phrases = this.phrases.filter(p => p !== normalized);
     }
     this.wordlistArray = Array.from(this.wordlist);
   }
@@ -564,12 +576,57 @@ export class ProfanityDetector {
    */
   detect(text: string): DetectionResult {
     const matches: ProfanityMatch[] = [];
+    const normalizedText = normalizeText(text);
+    const matchedRanges: Array<{ start: number; end: number }> = [];
 
-    // Check obfuscation patterns first
+    // Check for multi-word phrases FIRST (before individual words)
+    for (const phrase of this.phrases) {
+      // Create regex that matches the phrase with flexible whitespace
+      // Use word boundaries at start and end of the whole phrase
+      const phrasePattern = phrase.replace(/\s+/g, '\\s+');
+      const phraseRegex = new RegExp(`(^|[^a-z'])(${phrasePattern})(?![a-z'])`, 'gi');
+      let match;
+      while ((match = phraseRegex.exec(text)) !== null) {
+        // The actual match starts after the prefix group
+        const actualStart = match.index + match[1].length;
+        const actualEnd = actualStart + match[2].length;
+
+        // Skip religious whitelist phrases when sensitivity is 'low'
+        if (this.sensitivity === 'low' && RELIGIOUS_WHITELIST.has(phrase)) {
+          continue;
+        }
+
+        // Check context if enabled
+        if (this.useContextFiltering && isAllowedInContext(phrase, text, actualStart, actualEnd)) {
+          continue;
+        }
+
+        matches.push({
+          word: match[2], // The actual matched phrase (group 2)
+          startIndex: actualStart,
+          endIndex: actualEnd,
+          type: 'exact',
+          confidence: 100,
+        });
+        matchedRanges.push({ start: actualStart, end: actualEnd });
+      }
+    }
+
+    // Check obfuscation patterns
     for (const { pattern, word } of this.customPatterns) {
       let match;
       const regex = new RegExp(pattern.source, 'gi');
       while ((match = regex.exec(text)) !== null) {
+        // Skip if this match overlaps with an already-matched phrase
+        const overlapsWithPhrase = matchedRanges.some(
+          range => (match.index >= range.start && match.index < range.end) ||
+                   (match.index + match[0].length > range.start && match.index + match[0].length <= range.end) ||
+                   (match.index <= range.start && match.index + match[0].length >= range.end)
+        );
+        if (overlapsWithPhrase) {
+          continue;
+        }
+
         // Skip religious whitelist words when sensitivity is 'low'
         if (this.sensitivity === 'low' && RELIGIOUS_WHITELIST.has(normalizeText(word))) {
           continue;
