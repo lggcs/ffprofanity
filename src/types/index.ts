@@ -81,6 +81,14 @@ export interface Settings {
   useSubstitutions: boolean;   // Use fun substitutions instead of [CENSORED]
   substitutionCategory: 'silly' | 'polite' | 'random' | 'custom';
   customSubstitutions: Record<string, string>;  // Custom word mappings
+  // Subtitle display settings
+  showUpcomingCues: boolean;   // Show upcoming cues preview
+  upcomingCuesCount: number;   // Number of upcoming cues to show (0-3)
+  fontSize: 'small' | 'medium' | 'large' | 'xlarge';
+  fontColor: string;           // Hex color for subtitle text
+  backgroundColor: string;     // Hex color for subtitle background
+  position: 'bottom' | 'middle' | 'top';
+  backgroundOpacity: number;   // Background opacity (0-100)
 }
 
 // Storage schema version

@@ -22,6 +22,14 @@ const DEFAULT_SETTINGS: Settings = {
   useSubstitutions: false,
   substitutionCategory: 'silly',
   customSubstitutions: {},
+  // Subtitle display settings
+  showUpcomingCues: true,
+  upcomingCuesCount: 2,
+  fontSize: 'medium',
+  fontColor: '#ffffff',
+  backgroundColor: '#000000',
+  position: 'bottom',
+  backgroundOpacity: 80,
 };
 
 type StorageKey = 'cues_v1' | 'settings' | 'presets' | 'detectedTracks' | 'currentTrack';

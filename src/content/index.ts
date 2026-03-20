@@ -754,7 +754,6 @@ function createOverlay(): void {
     <style>
       .ffprofanity-overlay {
         position: fixed;
-        bottom: 80px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 2147483647;
@@ -763,11 +762,8 @@ function createOverlay(): void {
         pointer-events: none;
       }
       .ffprofanity-cue {
-        background: rgba(0, 0, 0, 0.8);
-        color: #ffffff;
         padding: 8px 16px;
         border-radius: 4px;
-        font-size: 20px;
         text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
         max-width: 80vw;
         line-height: 1.4;
@@ -787,7 +783,6 @@ function createOverlay(): void {
         color: rgba(255, 255, 255, 0.9);
         margin: 4px 0;
         padding: 4px 8px;
-        background: rgba(0, 0, 0, 0.5);
         border-radius: 3px;
       }
       .ffprofanity-notification {
@@ -860,6 +855,64 @@ function createOverlay(): void {
   overlayContainer.appendChild(currentCueEl);
   overlayContainer.appendChild(nextCuesEl);
   document.body.appendChild(overlayContainer);
+
+  // Apply initial display settings
+  applyDisplaySettings();
+}
+
+/**
+ * Apply display settings (font size, color, position, etc.)
+ */
+function applyDisplaySettings(): void {
+  if (!overlayContainer || !currentCueEl || !nextCuesEl) return;
+
+  // Font size mapping
+  const fontSizes: Record<string, string> = {
+    small: '16px',
+    medium: '20px',
+    large: '26px',
+    xlarge: '32px',
+  };
+
+  // Position mapping
+  const positions: Record<string, string> = {
+    bottom: '80px',
+    middle: '50%',
+    top: '80px',
+  };
+
+  // Apply position
+  overlayContainer.style.bottom = positions[settings.position] || '80px';
+  if (settings.position === 'middle') {
+    overlayContainer.style.top = '50%';
+    overlayContainer.style.bottom = 'auto';
+    overlayContainer.style.transform = 'translateX(-50%) translateY(-50%)';
+  } else if (settings.position === 'top') {
+    overlayContainer.style.top = positions.top;
+    overlayContainer.style.bottom = 'auto';
+    overlayContainer.style.transform = 'translateX(-50%)';
+  } else {
+    overlayContainer.style.bottom = positions.bottom;
+    overlayContainer.style.top = 'auto';
+    overlayContainer.style.transform = 'translateX(-50%)';
+  }
+
+  // Parse background opacity (0-100 -> 0-1)
+  const bgOpacity = (settings.backgroundOpacity ?? 80) / 100;
+
+  // Apply styles to current cue
+  currentCueEl.style.fontSize = fontSizes[settings.fontSize] || '20px';
+  currentCueEl.style.color = settings.fontColor || '#ffffff';
+
+  // Parse background color and apply with opacity
+  const bgColor = settings.backgroundColor || '#000000';
+  const bgR = parseInt(bgColor.slice(1, 3), 16);
+  const bgG = parseInt(bgColor.slice(3, 5), 16);
+  const bgB = parseInt(bgColor.slice(5, 7), 16);
+  currentCueEl.style.background = `rgba(${bgR}, ${bgG}, ${bgB}, ${bgOpacity})`;
+
+  // Apply upcoming cues visibility
+  nextCuesEl.style.display = settings.showUpcomingCues ? 'block' : 'none';
 }
 
 /**
@@ -869,10 +922,10 @@ function handleStorageChange(changes: Record<string, { newValue: unknown; oldVal
   if (changes.settings) {
     const oldSettings = settings;
     settings = { ...settings, ...(changes.settings.newValue as Partial<Settings>) };
-    
+
     // Recreate detector with new settings
     detector = createDetector(settings);
-    
+
     // Apply substitution settings
     if (settings.useSubstitutions) {
       detector.setSubstitutions(true, settings.substitutionCategory);
@@ -880,7 +933,7 @@ function handleStorageChange(changes: Record<string, { newValue: unknown; oldVal
         detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
       }
     }
-    
+
     // Re-compute profanity windows if sensitivity changed
     if (oldSettings.sensitivity !== settings.sensitivity) {
       console.log(`[FFProfanity] Sensitivity changed from ${oldSettings.sensitivity} to ${settings.sensitivity}, re-computing windows`);
@@ -898,6 +951,19 @@ function handleStorageChange(changes: Record<string, { newValue: unknown; oldVal
       }
       // Rebuild index with updated cues
       cueIndex.build(cues);
+    }
+
+    // Apply display settings if any changed
+    if (
+      oldSettings.fontSize !== settings.fontSize ||
+      oldSettings.fontColor !== settings.fontColor ||
+      oldSettings.backgroundColor !== settings.backgroundColor ||
+      oldSettings.position !== settings.position ||
+      oldSettings.backgroundOpacity !== settings.backgroundOpacity ||
+      oldSettings.showUpcomingCues !== settings.showUpcomingCues ||
+      oldSettings.upcomingCuesCount !== settings.upcomingCuesCount
+    ) {
+      applyDisplaySettings();
     }
   }
 }
@@ -1169,12 +1235,11 @@ function updatePlayback(currentTimeMs: number): void {
 
   // Find current subtitle cue and profanity status
   const currentCue = cueIndex.findActive(currentTimeMs, settings.offsetMs);
-  const nextCues = cueIndex.getNextCues(currentTimeMs, 3, settings.offsetMs);
 
   // Handle muting based on sensitivity setting
   // HIGH: mute entire cue, MEDIUM/LOW: mute only profanity word windows
   const muteState = cueIndex.getMuteState(currentTimeMs, settings.offsetMs, settings.sensitivity);
-  
+
   if (muteState.shouldMute && !isMuted) {
     // Entering a profanity zone
     currentProfanityCue = muteState.cue;
@@ -1195,16 +1260,21 @@ function updatePlayback(currentTimeMs: number): void {
     currentCueEl.style.display = 'block';
     currentCueEl.classList.remove('ffprofanity-hidden');
 
-    // Show next cues preview
-    if (nextCues.length > 0) {
-      const previews = nextCues
-        .map(c => {
-          const time = formatTime(c.startMs);
-          const text = c.hasProfanity ? c.censoredText : sanitizeText(c.text);
-          return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}</div>`;
-        })
-        .join('');
-      nextCuesEl.innerHTML = previews;
+    // Show next cues preview if enabled
+    if (settings.showUpcomingCues && settings.upcomingCuesCount > 0) {
+      const nextCues = cueIndex.getNextCues(currentTimeMs, settings.upcomingCuesCount, settings.offsetMs);
+      if (nextCues.length > 0) {
+        const previews = nextCues
+          .map(c => {
+            const time = formatTime(c.startMs);
+            const text = c.hasProfanity ? c.censoredText : sanitizeText(c.text);
+            return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}</div>`;
+          })
+          .join('');
+        nextCuesEl.innerHTML = previews;
+      } else {
+        nextCuesEl.innerHTML = '';
+      }
     } else {
       nextCuesEl.innerHTML = '';
     }

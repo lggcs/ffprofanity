@@ -42,10 +42,85 @@
       <div class="form-group">
         <label for="sensitivity">Sensitivity:</label>
         <select id="sensitivity">
-          <option value="low">Low - Only obvious profanity</option>
+          <option value="low">Low - Only obvious profanity, religious terms allowed</option>
           <option value="medium" selected>Medium - Standard detection</option>
           <option value="high">High - Aggressive detection (more false positives)</option>
         </select>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>🖥️ Subtitle Display</h2>
+      <p>Customize how subtitles appear on screen.</p>
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="showUpcomingCues" checked>
+          <span>Show upcoming cues preview</span>
+        </label>
+        <p class="help-text">Display upcoming subtitle cues below the current one.</p>
+      </div>
+      
+      <div class="form-group" id="upcomingCountGroup">
+        <label for="upcomingCuesCount">Number of upcoming cues:</label>
+        <select id="upcomingCuesCount">
+          <option value="1">1 cue</option>
+          <option value="2" selected>2 cues</option>
+          <option value="3">3 cues</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="fontSize">Font size:</label>
+        <select id="fontSize">
+          <option value="small">Small (16px)</option>
+          <option value="medium" selected>Medium (20px)</option>
+          <option value="large">Large (26px)</option>
+          <option value="xlarge">Extra Large (32px)</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="fontColor">Text color:</label>
+        <div class="color-input-group">
+          <input type="color" id="fontColor" value="#ffffff">
+          <input type="text" id="fontColorText" value="#ffffff" maxlength="7">
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label for="backgroundColor">Background color:</label>
+        <div class="color-input-group">
+          <input type="color" id="backgroundColor" value="#000000">
+          <input type="text" id="backgroundColorText" value="#000000" maxlength="7">
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label for="backgroundOpacity">Background opacity:</label>
+        <input type="range" id="backgroundOpacity" min="0" max="100" step="5" value="80">
+        <div class="opacity-display">
+          <span id="opacityValue">80%</span>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label for="position">Position:</label>
+        <select id="position">
+          <option value="bottom" selected>Bottom (default)</option>
+          <option value="middle">Middle</option>
+          <option value="top">Top</option>
+        </select>
+      </div>
+      
+      <div class="display-preview" id="displayPreview">
+        <h3>Preview</h3>
+        <div class="preview-container" id="previewContainer">
+          <div class="preview-subtitle" id="previewSubtitle">This is sample subtitle text</div>
+          <div class="preview-upcoming" id="previewUpcoming">
+            <div>00:30 Next subtitle cue...</div>
+          </div>
+        </div>
       </div>
     </section>
 
