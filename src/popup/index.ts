@@ -72,27 +72,39 @@ async function loadStatus(): Promise<void> {
   }
 }
 
-function updateStatus(status: { active: boolean; cueCount: number; hasVideo: boolean }): void {
+function updateStatus(status: { active: boolean; cueCount: number; profanityCount?: number; hasVideo: boolean }): void {
   const statusIndicator = document.getElementById('statusIndicator') as HTMLElement;
   const statusText = document.getElementById('statusText') as HTMLElement;
   const toggleBtn = document.getElementById('toggle') as HTMLButtonElement;
+  const statsSection = document.getElementById('statsSection') as HTMLElement;
+  const totalCuesEl = document.getElementById('totalCues') as HTMLElement;
+  const profanityCountEl = document.getElementById('profanityCount') as HTMLElement;
 
   if (!status.hasVideo) {
     statusIndicator.className = 'status-indicator status-warning';
     statusText.textContent = 'No video detected';
     toggleBtn.disabled = true;
+    statsSection.classList.add('hidden');
   } else if (status.active) {
     statusIndicator.className = 'status-indicator status-active';
-    statusText.textContent = status.cueCount > 0
-      ? `Active - ${status.cueCount} cues loaded`
-      : 'Active - No cues loaded';
+    statusText.textContent = 'Active';
     toggleBtn.textContent = 'Disable';
     toggleBtn.disabled = false;
+
+    // Show stats
+    if (status.cueCount > 0) {
+      statsSection.classList.remove('hidden');
+      totalCuesEl.textContent = status.cueCount.toString();
+      profanityCountEl.textContent = (status.profanityCount || 0).toString();
+    } else {
+      statsSection.classList.add('hidden');
+    }
   } else {
     statusIndicator.className = 'status-indicator status-inactive';
     statusText.textContent = 'Disabled';
     toggleBtn.textContent = 'Enable';
     toggleBtn.disabled = false;
+    statsSection.classList.add('hidden');
   }
 }
 

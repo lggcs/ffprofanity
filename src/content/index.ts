@@ -1059,6 +1059,7 @@ function handleMessage(message: unknown): Promise<unknown> {
       return Promise.resolve({
         active: isActive,
         cueCount: cues.length,
+        profanityCount: cues.filter(c => c.hasProfanity).length,
         hasVideo: !!videoElement,
         currentTrack,
         detectedTracks,
