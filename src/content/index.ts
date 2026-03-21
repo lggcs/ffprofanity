@@ -1378,9 +1378,17 @@ function startMonitoring(): void {
     console.log("[FFProfanity] startMonitoring: no videoElement, returning");
     return;
   }
-  if (animationFrameId) {
-    console.log("[FFProfanity] startMonitoring: already running");
+
+  // Only start if we have both video AND cues
+  if (cues.length === 0) {
+    console.log("[FFProfanity] startMonitoring: no cues, returning");
     return;
+  }
+
+  // Cancel any existing loop first - critical for multi-frame scenarios
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
   }
 
   console.log("[FFProfanity] startMonitoring: starting update loop");
@@ -1389,7 +1397,21 @@ function startMonitoring(): void {
   );
 
   const updateLoop = () => {
-    if (!isActive || !videoElement) return;
+    // Stop if video was lost or no longer active
+    if (!isActive || !videoElement) {
+      animationFrameId = null;
+      return;
+    }
+
+    // Safety check: stop if video element was disconnected
+    if (
+      !videoElement.isConnected &&
+      !document.fullscreenElement?.contains(videoElement)
+    ) {
+      console.log("[FFProfanity] Video element disconnected, stopping loop");
+      animationFrameId = null;
+      return;
+    }
 
     updatePlayback(videoElement.currentTime * 1000);
     animationFrameId = requestAnimationFrame(updateLoop);
