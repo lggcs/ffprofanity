@@ -3,8 +3,8 @@
  * Quick controls for enable/disable and current status
  */
 
-import '../styles/popup.css';
-import type { Settings, SubtitleTrack } from '../types';
+import "../styles/popup.css";
+import type { Settings, SubtitleTrack } from "../types";
 
 // State
 let isActive = false;
@@ -19,36 +19,46 @@ let trackList: HTMLElement;
 let trackOptions: HTMLElement;
 
 async function init(): Promise<void> {
-  statusEl = document.getElementById('status') as HTMLElement;
-  trackSection = document.getElementById('trackSection') as HTMLElement;
-  currentTrackName = document.getElementById('currentTrackName') as HTMLElement;
-  trackList = document.getElementById('trackList') as HTMLElement;
-  trackOptions = document.getElementById('trackOptions') as HTMLElement;
+  statusEl = document.getElementById("status") as HTMLElement;
+  trackSection = document.getElementById("trackSection") as HTMLElement;
+  currentTrackName = document.getElementById("currentTrackName") as HTMLElement;
+  trackList = document.getElementById("trackList") as HTMLElement;
+  trackOptions = document.getElementById("trackOptions") as HTMLElement;
 
-  const toggleBtn = document.getElementById('toggle') as HTMLElement;
-  const optionsBtn = document.getElementById('options') as HTMLElement;
-  const changeTrackBtn = document.getElementById('changeTrackBtn') as HTMLElement;
-  const subtitleFileInput = document.getElementById('subtitleFile') as HTMLInputElement;
+  const toggleBtn = document.getElementById("toggle") as HTMLElement;
+  const optionsBtn = document.getElementById("options") as HTMLElement;
+  const changeTrackBtn = document.getElementById(
+    "changeTrackBtn",
+  ) as HTMLElement;
+  const subtitleFileInput = document.getElementById(
+    "subtitleFile",
+  ) as HTMLInputElement;
 
   // Load current status
   await loadStatus();
 
   // Setup event handlers
-  toggleBtn.addEventListener('click', handleToggle);
-  optionsBtn.addEventListener('click', handleOptions);
-  changeTrackBtn.addEventListener('click', toggleTrackList);
-  subtitleFileInput.addEventListener('change', handleFileUpload);
+  toggleBtn.addEventListener("click", handleToggle);
+  optionsBtn.addEventListener("click", handleOptions);
+  changeTrackBtn.addEventListener("click", toggleTrackList);
+  subtitleFileInput.addEventListener("change", handleFileUpload);
 }
 
 async function loadStatus(): Promise<void> {
   try {
     // Get current tab
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browser.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
     if (!tab.id) return;
 
-    // Try to get status from content script
+    // Try to get status from background (aggregates from all frames)
     try {
-      const response = await browser.tabs.sendMessage(tab.id, { type: 'getStatus' }) as {
+      const response = (await browser.runtime.sendMessage({
+        type: "getAggregatedStatus",
+        tabId: tab.id,
+      })) as {
         active: boolean;
         cueCount: number;
         hasVideo: boolean;
@@ -59,107 +69,143 @@ async function loadStatus(): Promise<void> {
       isActive = response.active;
       currentTrack = response.currentTrack || null;
       detectedTracks = response.detectedTracks || [];
-      
+
       updateStatus(response);
       updateTrackSection();
     } catch {
-      // Content script not loaded or doesn't support this
-      updateStatus({ active: false, cueCount: 0, hasVideo: false });
-      trackSection.classList.add('hidden');
+      // Background script not available, try direct content script query
+      try {
+        const response = (await browser.tabs.sendMessage(tab.id, {
+          type: "getStatus",
+        })) as {
+          active: boolean;
+          cueCount: number;
+          hasVideo: boolean;
+          currentTrack: SubtitleTrack | null;
+          detectedTracks: SubtitleTrack[];
+        };
+
+        isActive = response.active;
+        currentTrack = response.currentTrack || null;
+        detectedTracks = response.detectedTracks || [];
+
+        updateStatus(response);
+        updateTrackSection();
+      } catch {
+        // Content script not loaded or doesn't support this
+        updateStatus({ active: false, cueCount: 0, hasVideo: false });
+        trackSection.classList.add("hidden");
+      }
     }
   } catch (error) {
-    console.error('Failed to load status:', error);
+    console.error("Failed to load status:", error);
   }
 }
 
-function updateStatus(status: { active: boolean; cueCount: number; profanityCount?: number; hasVideo: boolean }): void {
-  const statusIndicator = document.getElementById('statusIndicator') as HTMLElement;
-  const statusText = document.getElementById('statusText') as HTMLElement;
-  const toggleBtn = document.getElementById('toggle') as HTMLButtonElement;
-  const statsSection = document.getElementById('statsSection') as HTMLElement;
-  const totalCuesEl = document.getElementById('totalCues') as HTMLElement;
-  const profanityCountEl = document.getElementById('profanityCount') as HTMLElement;
+function updateStatus(status: {
+  active: boolean;
+  cueCount: number;
+  profanityCount?: number;
+  hasVideo: boolean;
+}): void {
+  const statusIndicator = document.getElementById(
+    "statusIndicator",
+  ) as HTMLElement;
+  const statusText = document.getElementById("statusText") as HTMLElement;
+  const toggleBtn = document.getElementById("toggle") as HTMLButtonElement;
+  const statsSection = document.getElementById("statsSection") as HTMLElement;
+  const totalCuesEl = document.getElementById("totalCues") as HTMLElement;
+  const profanityCountEl = document.getElementById(
+    "profanityCount",
+  ) as HTMLElement;
 
   if (!status.hasVideo) {
-    statusIndicator.className = 'status-indicator status-warning';
-    statusText.textContent = 'No video detected';
+    statusIndicator.className = "status-indicator status-warning";
+    statusText.textContent = "No video detected";
     toggleBtn.disabled = true;
-    statsSection.classList.add('hidden');
+    statsSection.classList.add("hidden");
   } else if (status.active) {
-    statusIndicator.className = 'status-indicator status-active';
-    statusText.textContent = 'Active';
-    toggleBtn.textContent = 'Disable';
+    statusIndicator.className = "status-indicator status-active";
+    statusText.textContent = "Active";
+    toggleBtn.textContent = "Disable";
     toggleBtn.disabled = false;
 
     // Show stats
     if (status.cueCount > 0) {
-      statsSection.classList.remove('hidden');
+      statsSection.classList.remove("hidden");
       totalCuesEl.textContent = status.cueCount.toString();
       profanityCountEl.textContent = (status.profanityCount || 0).toString();
     } else {
-      statsSection.classList.add('hidden');
+      statsSection.classList.add("hidden");
     }
   } else {
-    statusIndicator.className = 'status-indicator status-inactive';
-    statusText.textContent = 'Disabled';
-    toggleBtn.textContent = 'Enable';
+    statusIndicator.className = "status-indicator status-inactive";
+    statusText.textContent = "Disabled";
+    toggleBtn.textContent = "Enable";
     toggleBtn.disabled = false;
-    statsSection.classList.add('hidden');
+    statsSection.classList.add("hidden");
   }
 }
 
 function updateTrackSection(): void {
   if (detectedTracks.length > 0 || currentTrack) {
-    trackSection.classList.remove('hidden');
-    
+    trackSection.classList.remove("hidden");
+
     if (currentTrack) {
-      const label = currentTrack.isSDH ? `${currentTrack.label} ★` : currentTrack.label;
+      const label = currentTrack.isSDH
+        ? `${currentTrack.label} ★`
+        : currentTrack.label;
       currentTrackName.textContent = label;
     } else {
-      currentTrackName.textContent = 'None selected';
+      currentTrackName.textContent = "None selected";
     }
   } else {
-    trackSection.classList.add('hidden');
+    trackSection.classList.add("hidden");
   }
 }
 
 function toggleTrackList(): void {
-  trackList.classList.toggle('hidden');
-  
-  if (!trackList.classList.contains('hidden')) {
+  trackList.classList.toggle("hidden");
+
+  if (!trackList.classList.contains("hidden")) {
     renderTrackOptions();
   }
 }
 
 function renderTrackOptions(): void {
-  trackOptions.innerHTML = '';
-  
+  trackOptions.innerHTML = "";
+
   for (const track of detectedTracks) {
-    const item = document.createElement('div');
-    item.className = 'track-item';
+    const item = document.createElement("div");
+    item.className = "track-item";
     if (track.isSDH) {
-      item.classList.add('sdh');
+      item.classList.add("sdh");
     }
     if (currentTrack?.id === track.id) {
-      item.classList.add('selected');
+      item.classList.add("selected");
     }
-    
+
     const label = track.isSDH ? `${track.label} ★` : track.label;
-    const source = track.source === 'user' ? '(uploaded)' : track.source === 'network' ? '(detected)' : '';
-    
+    const source =
+      track.source === "user"
+        ? "(uploaded)"
+        : track.source === "network"
+          ? "(detected)"
+          : "";
+
     item.textContent = `${label} ${source}`;
-    item.addEventListener('click', () => handleSelectTrack(track));
-    
+    item.addEventListener("click", () => handleSelectTrack(track));
+
     trackOptions.appendChild(item);
   }
-  
+
   // Add upload option
   if (detectedTracks.length === 0) {
-    const noTracks = document.createElement('div');
-    noTracks.className = 'track-item';
-    noTracks.textContent = 'No tracks detected on this page';
-    noTracks.style.fontStyle = 'italic';
-    noTracks.style.color = '#888';
+    const noTracks = document.createElement("div");
+    noTracks.className = "track-item";
+    noTracks.textContent = "No tracks detected on this page";
+    noTracks.style.fontStyle = "italic";
+    noTracks.style.color = "#888";
     trackOptions.appendChild(noTracks);
   }
 }
@@ -169,12 +215,15 @@ async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
   if (!tab.id) return;
 
   try {
-    await browser.tabs.sendMessage(tab.id, { type: 'selectTrack', trackId: track.id });
+    await browser.tabs.sendMessage(tab.id, {
+      type: "selectTrack",
+      trackId: track.id,
+    });
     currentTrack = track;
     updateTrackSection();
-    trackList.classList.add('hidden');
+    trackList.classList.add("hidden");
   } catch (error) {
-    console.error('Failed to select track:', error);
+    console.error("Failed to select track:", error);
   }
 }
 
@@ -182,7 +231,7 @@ async function handleToggle(): Promise<void> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab.id) return;
 
-  const message = isActive ? { type: 'disable' } : { type: 'enable' };
+  const message = isActive ? { type: "disable" } : { type: "enable" };
 
   await browser.tabs.sendMessage(tab.id, message);
   isActive = !isActive;
@@ -210,22 +259,22 @@ async function handleFileUpload(event: Event): Promise<void> {
     const content = e.target?.result as string;
     try {
       await browser.tabs.sendMessage(tabId, {
-        type: 'uploadCues',
+        type: "uploadCues",
         content,
-        filename: file.name
+        filename: file.name,
       });
-      trackList.classList.add('hidden');
+      trackList.classList.add("hidden");
       await loadStatus();
     } catch (error) {
-      console.error('Failed to upload cues:', error);
+      console.error("Failed to upload cues:", error);
     }
   };
   reader.readAsText(file);
 }
 
 // Initialize on DOM ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
 } else {
   init();
 }

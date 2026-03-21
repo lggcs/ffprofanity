@@ -3,12 +3,18 @@
  * Detects and extracts subtitle tracks from video elements and network requests
  */
 
-import type { SubtitleTrack, NetworkSubtitle } from '../types';
-import { createTrackFromElement, createTrackFromNetwork } from './tracks';
+import type { SubtitleTrack, NetworkSubtitle } from "../types";
+import { createTrackFromElement, createTrackFromNetwork } from "./tracks";
 
 // File extensions that indicate subtitle files
-const SUBTITLE_EXTENSIONS = ['.vtt', '.srt', '.ass', '.ssa', '.sub'];
-const SUBTITLE_MIME_TYPES = ['text/vtt', 'text/srt', 'application/x-subrip', 'text/x-ssa', 'text/x-ass'];
+const SUBTITLE_EXTENSIONS = [".vtt", ".srt", ".ass", ".ssa", ".sub"];
+const SUBTITLE_MIME_TYPES = [
+  "text/vtt",
+  "text/srt",
+  "application/x-subrip",
+  "text/x-ssa",
+  "text/x-ass",
+];
 
 // URL patterns for known streaming sites
 const STREAMING_PATTERNS = [
@@ -21,7 +27,7 @@ const STREAMING_PATTERNS = [
   /\.srt$/i,
   /\.ass$/i,
   /\.ssa$/i,
-  
+
   // Streaming site specific
   /manifest=.*\.vtt/i,
   /subtitle.*\.m3u8/i,
@@ -34,23 +40,23 @@ export function isSubtitleUrl(url: string): boolean {
   try {
     const urlObj = new URL(url);
     const path = urlObj.pathname.toLowerCase();
-    
+
     // Check extension
-    if (SUBTITLE_EXTENSIONS.some(ext => path.endsWith(ext))) {
+    if (SUBTITLE_EXTENSIONS.some((ext) => path.endsWith(ext))) {
       return true;
     }
-    
+
     // Check for subtitle query parameters
     const query = urlObj.searchParams;
-    if (query.has('subtitle') || query.has('subs') || query.has('captions')) {
+    if (query.has("subtitle") || query.has("subs") || query.has("captions")) {
       return true;
     }
-    
+
     // Check against known patterns
-    if (STREAMING_PATTERNS.some(pattern => pattern.test(url))) {
+    if (STREAMING_PATTERNS.some((pattern) => pattern.test(url))) {
       return true;
     }
-    
+
     return false;
   } catch {
     return false;
@@ -62,32 +68,39 @@ export function isSubtitleUrl(url: string): boolean {
  */
 export function detectSubtitleFormat(
   url: string,
-  contentType?: string
-): 'srt' | 'vtt' | 'ass' | 'unknown' {
+  contentType?: string,
+): "srt" | "vtt" | "ass" | "unknown" {
   // Check content type first
   if (contentType) {
-    if (contentType.includes('vtt') || contentType.includes('webvtt')) return 'vtt';
-    if (contentType.includes('subrip') || contentType.includes('srt')) return 'srt';
-    if (contentType.includes('ssa') || contentType.includes('ass')) return 'ass';
+    if (contentType.includes("vtt") || contentType.includes("webvtt"))
+      return "vtt";
+    if (contentType.includes("subrip") || contentType.includes("srt"))
+      return "srt";
+    if (contentType.includes("ssa") || contentType.includes("ass"))
+      return "ass";
   }
-  
+
   // Check URL extension
   const path = url.toLowerCase();
-  if (path.includes('.vtt')) return 'vtt';
-  if (path.includes('.ass') || path.includes('.ssa')) return 'ass';
-  if (path.includes('.srt')) return 'srt';
-  
-  return 'unknown';
+  if (path.includes(".vtt")) return "vtt";
+  if (path.includes(".ass") || path.includes(".ssa")) return "ass";
+  if (path.includes(".srt")) return "srt";
+
+  return "unknown";
 }
 
 /**
  * Extract subtitle tracks from a video element
  */
-export function extractTracksFromVideo(video: HTMLVideoElement): SubtitleTrack[] {
+export function extractTracksFromVideo(
+  video: HTMLVideoElement,
+): SubtitleTrack[] {
   const tracks: SubtitleTrack[] = [];
 
   // Get all <track> children
-  const trackElements = Array.from(video.querySelectorAll('track[kind="subtitles"], track[kind="captions"]')) as HTMLTrackElement[];
+  const trackElements = Array.from(
+    video.querySelectorAll('track[kind="subtitles"], track[kind="captions"]'),
+  ) as HTMLTrackElement[];
 
   for (const element of trackElements) {
     const track = createTrackFromElement(element);
@@ -102,7 +115,7 @@ export function extractTracksFromVideo(video: HTMLVideoElement): SubtitleTrack[]
  */
 export function scanPageForTracks(): SubtitleTrack[] {
   const allTracks: SubtitleTrack[] = [];
-  const videos = Array.from(document.querySelectorAll('video'));
+  const videos = Array.from(document.querySelectorAll("video"));
 
   for (const video of videos) {
     const tracks = extractTracksFromVideo(video);
@@ -119,23 +132,25 @@ export function scanPageForTracks(): SubtitleTrack[] {
 class SubtitleUrlDetector {
   private detectedUrls: Map<string, NetworkSubtitle> = new Map();
   private maxAge = 5 * 60 * 1000; // 5 minutes
-  
+
   /**
    * Add a detected subtitle URL
    */
   addUrl(url: string, contentType?: string): void {
     if (!isSubtitleUrl(url)) return;
-    
+
     const format = detectSubtitleFormat(url, contentType);
-    
+
     // Extract language from URL if possible
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
     const language = langMatch ? langMatch[1].toLowerCase() : undefined;
-    
+
     // Extract label from URL
     const labelMatch = url.match(/\/([^\/]+)\.(?:vtt|srt|ass|ssa)$/i);
-    const label = labelMatch ? labelMatch[1].replace(/[_\-\+]/g, ' ') : undefined;
-    
+    const label = labelMatch
+      ? labelMatch[1].replace(/[_\-\+]/g, " ")
+      : undefined;
+
     this.detectedUrls.set(url, {
       url,
       format,
@@ -143,11 +158,11 @@ class SubtitleUrlDetector {
       label,
       timestamp: Date.now(),
     });
-    
+
     // Clean up old entries
     this.cleanup();
   }
-  
+
   /**
    * Get all detected URLs
    */
@@ -155,7 +170,7 @@ class SubtitleUrlDetector {
     this.cleanup();
     return Array.from(this.detectedUrls.values());
   }
-  
+
   /**
    * Remove entries older than maxAge
    */
@@ -167,7 +182,7 @@ class SubtitleUrlDetector {
       }
     }
   }
-  
+
   /**
    * Clear all detected URLs
    */
@@ -182,46 +197,58 @@ export const subtitleDetector = new SubtitleUrlDetector();
 /**
  * Parse M3U8 playlist for embedded subtitle tracks
  */
-export function parseM3U8Subtitles(content: string, baseUrl: string): SubtitleTrack[] {
+export function parseM3U8Subtitles(
+  content: string,
+  baseUrl: string,
+): SubtitleTrack[] {
   const tracks: SubtitleTrack[] = [];
-  const lines = content.split('\n');
-  
-  let currentInfo: { type?: string; language?: string; label?: string; url?: string } = {};
-  
+  const lines = content.split("\n");
+
+  let currentInfo: {
+    type?: string;
+    language?: string;
+    label?: string;
+    url?: string;
+  } = {};
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    
+
     // Parse EXT-X-MEDIA tag for subtitles
-    if (line.startsWith('#EXT-X-MEDIA:TYPE=SUBTITLES')) {
-      currentInfo = { type: 'subtitles' };
-      
+    if (line.startsWith("#EXT-X-MEDIA:TYPE=SUBTITLES")) {
+      currentInfo = { type: "subtitles" };
+
       // Parse attributes
-      const attrs = line.slice('#EXT-X-MEDIA:'.length);
+      const attrs = line.slice("#EXT-X-MEDIA:".length);
       const langMatch = attrs.match(/LANGUAGE="([^"]+)"/i);
       const nameMatch = attrs.match(/NAME="([^"]+)"/i);
-      
+
       if (langMatch) currentInfo.language = langMatch[1];
       if (nameMatch) currentInfo.label = nameMatch[1];
     }
-    
+
     // If we're in subtitle mode, next non-comment line is the URL
-    if (currentInfo.type === 'subtitles' && !line.startsWith('#') && line.length > 0) {
+    if (
+      currentInfo.type === "subtitles" &&
+      !line.startsWith("#") &&
+      line.length > 0
+    ) {
       currentInfo.url = new URL(line, baseUrl).href;
-      
+
       if (currentInfo.url && currentInfo.language) {
         const track = createTrackFromNetwork(
           currentInfo.url,
-          'vtt',
+          "vtt",
           currentInfo.language,
-          currentInfo.label || currentInfo.language
+          currentInfo.label || currentInfo.language,
         );
         tracks.push(track);
       }
-      
+
       currentInfo = {};
     }
   }
-  
+
   return tracks;
 }
 
@@ -231,7 +258,7 @@ export function parseM3U8Subtitles(content: string, baseUrl: string): SubtitleTr
  */
 export function extractFromPageScripts(): SubtitleTrack[] {
   const tracks: SubtitleTrack[] = [];
-  const scripts = Array.from(document.querySelectorAll('script'));
+  const scripts = Array.from(document.querySelectorAll("script"));
 
   // Patterns to search for
   const jsonPatterns = [
@@ -245,8 +272,8 @@ export function extractFromPageScripts(): SubtitleTrack[] {
   const filePattern = /"file"\s*:\s*"([^"]+\.vtt|[^"]+\.srt|[^"]+\.ass)"/gi;
 
   for (const script of scripts) {
-    const content = script.textContent || '';
-    
+    const content = script.textContent || "";
+
     // Skip empty scripts
     if (content.length < 10) continue;
 
@@ -266,14 +293,19 @@ export function extractFromPageScripts(): SubtitleTrack[] {
           const absoluteUrl = new URL(url, window.location.href).href;
 
           // Extract language from context
-          const langMatch = content.slice(Math.max(0, match.index - 100), match.index)
+          const langMatch = content
+            .slice(Math.max(0, match.index - 100), match.index)
             .match(/"language?"\s*:\s*"([^"]+)"/i);
           const lang = langMatch ? langMatch[1] : undefined;
 
-          const track = createTrackFromNetwork(absoluteUrl, detectSubtitleFormat(absoluteUrl), lang);
+          const track = createTrackFromNetwork(
+            absoluteUrl,
+            detectSubtitleFormat(absoluteUrl),
+            lang,
+          );
 
           // Avoid duplicates
-          if (!tracks.some(t => t.url === track.url)) {
+          if (!tracks.some((t) => t.url === track.url)) {
             tracks.push(track);
           }
         } catch {
@@ -290,7 +322,7 @@ export function extractFromPageScripts(): SubtitleTrack[] {
  * Watch video element for new <track> elements
  */
 export function watchForVideoTracks(
-  callback: (tracks: SubtitleTrack[]) => void
+  callback: (tracks: SubtitleTrack[]) => void,
 ): () => void {
   const observer = new MutationObserver(() => {
     const tracks = scanPageForTracks();
@@ -331,14 +363,19 @@ export function getAllAvailableTracks(): SubtitleTrack[] {
  */
 const SITE_CONFIGS = [
   {
-    name: 'lookmovie',
+    name: "lookmovie",
     patterns: [/lookmovie\d*\.to/i, /lookmovie\.[a-z]+/i],
-    apiEndpoints: ['/api/v1/security/movie-access', '/api/v2/download/'],
+    apiEndpoints: ["/api/v1/security/movie-access", "/api/v2/download/"],
   },
   {
-    name: 'youtube',
+    name: "youtube",
     patterns: [/youtube\.com/i, /youtu\.be/i],
-    apiEndpoints: ['/api/timedtext', '/caption/'],
+    apiEndpoints: ["/api/timedtext", "/caption/"],
+  },
+  {
+    name: "123chill",
+    patterns: [/123chill\.uk/i, /123chill\.[a-z]+/i, /123movies\.uk/i],
+    apiEndpoints: [],
   },
 ];
 
@@ -349,7 +386,7 @@ export function isKnownSite(url: string): string | null {
   try {
     const hostname = new URL(url).hostname;
     for (const config of SITE_CONFIGS) {
-      if (config.patterns.some(p => p.test(hostname))) {
+      if (config.patterns.some((p) => p.test(hostname))) {
         return config.name;
       }
     }
@@ -363,6 +400,6 @@ export function isKnownSite(url: string): string | null {
  * Get API endpoint patterns for a known site
  */
 export function getApiEndpoints(siteName: string): string[] {
-  const config = SITE_CONFIGS.find(c => c.name === siteName);
+  const config = SITE_CONFIGS.find((c) => c.name === siteName);
   return config?.apiEndpoints || [];
 }

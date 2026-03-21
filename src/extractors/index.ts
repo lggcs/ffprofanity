@@ -3,14 +3,16 @@
  * Routes subtitle extraction to site-specific extractors
  */
 
-import type { SiteExtractor, DetectedSubtitle } from './base';
-import { LookMovieExtractor } from './lookmovie';
-import { YouTubeExtractor } from './youtube';
+import type { SiteExtractor, DetectedSubtitle } from "./base";
+import { LookMovieExtractor } from "./lookmovie";
+import { YouTubeExtractor } from "./youtube";
+import { OneTwoThreeChillExtractor } from "./123chill";
 
 // All available extractors
 const extractors: SiteExtractor[] = [
   new LookMovieExtractor(),
   new YouTubeExtractor(),
+  new OneTwoThreeChillExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -30,7 +32,7 @@ export function getExtractorForUrl(url: string): SiteExtractor | null {
  * Get all extractors that match the URL
  */
 export function getAllMatchingExtractors(url: string): SiteExtractor[] {
-  return extractors.filter(e => e.matches(url));
+  return extractors.filter((e) => e.matches(url));
 }
 
 /**
@@ -38,18 +40,18 @@ export function getAllMatchingExtractors(url: string): SiteExtractor[] {
  */
 export function getInjectedScripts(url: string): string {
   const matching = getAllMatchingExtractors(url);
-  if (matching.length === 0) return '';
+  if (matching.length === 0) return "";
 
   const scripts = matching
-    .map(e => e.getInjectedScript?.() || '')
-    .filter(s => s.length > 0);
+    .map((e) => e.getInjectedScript?.() || "")
+    .filter((s) => s.length > 0);
 
-  if (scripts.length === 0) return '';
+  if (scripts.length === 0) return "";
 
   return `
     // Site-specific extractors
     (function() {
-      ${scripts.join('\n\n')}
+      ${scripts.join("\n\n")}
     })();
   `;
 }
@@ -57,7 +59,10 @@ export function getInjectedScripts(url: string): string {
 /**
  * Process a network response with matching extractors
  */
-export function processResponse(url: string, responseText: string): DetectedSubtitle[] {
+export function processResponse(
+  url: string,
+  responseText: string,
+): DetectedSubtitle[] {
   const subs: DetectedSubtitle[] = [];
 
   for (const extractor of getAllMatchingExtractors(url)) {
@@ -93,10 +98,11 @@ export function extractLanguageFromUrl(url: string): string {
     if (match) return match[1].toLowerCase();
   }
 
-  return 'unknown';
+  return "unknown";
 }
 
 // Export everything
-export { SiteExtractor, DetectedSubtitle, BaseExtractor } from './base';
-export { lookMovieExtractor } from './lookmovie';
-export { youTubeExtractor } from './youtube';
+export { SiteExtractor, DetectedSubtitle, BaseExtractor } from "./base";
+export { lookMovieExtractor } from "./lookmovie";
+export { youTubeExtractor } from "./youtube";
+export { oneTwoThreeChillExtractor } from "./123chill";

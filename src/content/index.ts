@@ -3,14 +3,30 @@
  * Monitors video playback, renders subtitle overlay, and triggers mute/unmute
  */
 
-import { storage } from '../lib/storage';
-import { parseSubtitle, sanitizeText, ParseResult } from '../lib/parser';
-import { ProfanityDetector, createDetector, computeProfanityWindows } from '../lib/detector';
-import { CueIndex } from '../lib/cueIndex';
-import { selectBestTrack, formatTrackLabel, createTrackFromUser } from '../lib/tracks';
-import { scanPageForTracks, extractFromPageScripts, watchForVideoTracks } from '../lib/extractor';
-import { getAllMatchingExtractors, extractLanguageFromUrl, isSubtitleUrl } from '../extractors';
-import type { Cue, Settings, SubtitleTrack } from '../types';
+import { storage } from "../lib/storage";
+import { parseSubtitle, sanitizeText, ParseResult } from "../lib/parser";
+import {
+  ProfanityDetector,
+  createDetector,
+  computeProfanityWindows,
+} from "../lib/detector";
+import { CueIndex } from "../lib/cueIndex";
+import {
+  selectBestTrack,
+  formatTrackLabel,
+  createTrackFromUser,
+} from "../lib/tracks";
+import {
+  scanPageForTracks,
+  extractFromPageScripts,
+  watchForVideoTracks,
+} from "../lib/extractor";
+import {
+  getAllMatchingExtractors,
+  extractLanguageFromUrl,
+  isSubtitleUrl,
+} from "../extractors";
+import type { Cue, Settings, SubtitleTrack } from "../types";
 
 // State
 let cues: Cue[] = [];
@@ -45,19 +61,23 @@ let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
  * Initialize the content script
  */
 async function init(): Promise<void> {
-  console.log('[FFProfanity] Content script initializing...');
+  console.log("[FFProfanity] Content script initializing...");
 
   // Load settings
   settings = await storage.getSettings();
-  console.log('[FFProfanity] Settings loaded:', { offsetMs: settings.offsetMs, sensitivity: settings.sensitivity, useSubstitutions: settings.useSubstitutions });
+  console.log("[FFProfanity] Settings loaded:", {
+    offsetMs: settings.offsetMs,
+    sensitivity: settings.sensitivity,
+    useSubstitutions: settings.useSubstitutions,
+  });
 
   // Create detector
   // Only pass wordlist if user has custom words; otherwise use defaults
-  const detectorConfig: Partial<import('../lib/detector').ProfanityConfig> = {
+  const detectorConfig: Partial<import("../lib/detector").ProfanityConfig> = {
     ...settings,
     wordlist: settings.wordlist.length > 0 ? settings.wordlist : undefined,
-    customSubstitutions: settings.customSubstitutions 
-      ? new Map(Object.entries(settings.customSubstitutions)) 
+    customSubstitutions: settings.customSubstitutions
+      ? new Map(Object.entries(settings.customSubstitutions))
       : undefined,
   };
   detector = createDetector(detectorConfig);
@@ -67,8 +87,13 @@ async function init(): Promise<void> {
   // Apply substitution settings
   if (settings.useSubstitutions) {
     detector.setSubstitutions(true, settings.substitutionCategory);
-    if (settings.customSubstitutions && Object.keys(settings.customSubstitutions).length > 0) {
-      detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
+    if (
+      settings.customSubstitutions &&
+      Object.keys(settings.customSubstitutions).length > 0
+    ) {
+      detector.setCustomSubstitutions(
+        new Map(Object.entries(settings.customSubstitutions)),
+      );
     }
   }
 
@@ -77,11 +102,11 @@ async function init(): Promise<void> {
 
   // Find video element
   findVideoElement();
-  console.log('[FFProfanity] Video element found:', !!videoElement);
+  console.log("[FFProfanity] Video element found:", !!videoElement);
 
   // Create overlay
   createOverlay();
-  console.log('[FFProfanity] Overlay created');
+  console.log("[FFProfanity] Overlay created");
 
   // Inject script to intercept API responses on streaming sites
   injectApiInterceptor();
@@ -91,11 +116,11 @@ async function init(): Promise<void> {
 
   // Scan for existing subtitle tracks
   await scanForTracks();
-  console.log('[FFProfanity] Detected tracks:', detectedTracks.length);
+  console.log("[FFProfanity] Detected tracks:", detectedTracks.length);
 
   // Watch for dynamically added tracks
   watchForVideoTracks((tracks) => {
-    console.log('[FFProfanity] New tracks detected:', tracks.length);
+    console.log("[FFProfanity] New tracks detected:", tracks.length);
     addDetectedTracks(tracks);
   });
 
@@ -111,7 +136,7 @@ async function init(): Promise<void> {
     startMonitoring();
   }
 
-  console.log('[FFProfanity] Content script ready');
+  console.log("[FFProfanity] Content script ready");
 }
 
 /**
@@ -123,11 +148,11 @@ function injectApiInterceptor(): void {
   const currentUrl = window.location.href;
   const matchingExtractors = getAllMatchingExtractors(currentUrl);
   const siteScripts = matchingExtractors
-    .map(e => (e as any).getInjectedScript?.() || '')
+    .map((e) => (e as any).getInjectedScript?.() || "")
     .filter((s: string) => s.length > 0)
-    .join('\n\n');
+    .join("\n\n");
 
-  const script = document.createElement('script');
+  const script = document.createElement("script");
   script.textContent = `
     (function() {
       console.log('[FFProfanity] API interceptor injected');
@@ -318,7 +343,7 @@ function injectApiInterceptor(): void {
   script.remove();
 
   // Listen for messages from the injected script
-  window.addEventListener('message', handleInterceptedMessage);
+  window.addEventListener("message", handleInterceptedMessage);
 }
 
 /**
@@ -331,9 +356,11 @@ function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
 
   // Handle subtitle content (fetched in page context with cookies)
-  if (event.data?.type === 'FFPROFANITY_SUBTITLE_CONTENT') {
+  if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
     const { content, language, label, source } = event.data;
-    console.log(`[FFProfanity] Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`);
+    console.log(
+      `[FFProfanity] Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`,
+    );
 
     if (content && content.length > 10) {
       // Parse and use directly
@@ -343,15 +370,19 @@ function handleInterceptedMessage(event: MessageEvent): void {
   }
 
   // Handle track metadata
-  if (event.data?.type !== 'FFPROFANITY_SUBTITLES_DETECTED') return;
+  if (event.data?.type !== "FFPROFANITY_SUBTITLES_DETECTED") return;
 
   const { subtitles, source } = event.data;
-  console.log(`[FFProfanity] Received ${subtitles.length} subtitles from ${source}`);
+  console.log(
+    `[FFProfanity] Received ${subtitles.length} subtitles from ${source}`,
+  );
 
   // Log each subtitle URL for debugging
   for (const sub of subtitles) {
     if (sub.url) {
-      console.log(`[FFProfanity] Subtitle: ${sub.label || sub.language} - ${sub.url.substring(0, 100)}...`);
+      console.log(
+        `[FFProfanity] Subtitle: ${sub.label || sub.language} - ${sub.url.substring(0, 100)}...`,
+      );
     }
   }
 
@@ -363,9 +394,9 @@ function handleInterceptedMessage(event: MessageEvent): void {
     const track: SubtitleTrack = {
       id: `intercepted-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       url: sub.url,
-      label: sub.label || sub.language || 'Detected',
-      language: sub.language || '',
-      isSDH: /sdh|cc|hearing|deaf/i.test(sub.label || ''),
+      label: sub.label || sub.language || "Detected",
+      language: sub.language || "",
+      isSDH: /sdh|cc|hearing|deaf/i.test(sub.label || ""),
       isDefault: false,
       embedded: false,
       source: source,
@@ -385,17 +416,27 @@ function handleInterceptedMessage(event: MessageEvent): void {
  * Handle subtitle content received from page context (YouTube)
  * This bypasses the need to fetch with credentials from content script
  */
-function handleSubtitleContent(content: string, language: string, label: string, source: string): void {
+function handleSubtitleContent(
+  content: string,
+  language: string,
+  label: string,
+  source: string,
+): void {
   // Parse the content
   const result = parseSubtitle(content);
 
   if (result.cues.length === 0) {
-    console.error('[FFProfanity] Parse errors:', result.errors);
-    showNotification('error', `Failed to parse subtitle: ${result.errors.join(', ')}`);
+    console.error("[FFProfanity] Parse errors:", result.errors);
+    showNotification(
+      "error",
+      `Failed to parse subtitle: ${result.errors.join(", ")}`,
+    );
     return;
   }
 
-  console.log(`[FFProfanity] Parsed ${result.cues.length} cues from ${source} (${language})`);
+  console.log(
+    `[FFProfanity] Parsed ${result.cues.length} cues from ${source} (${language})`,
+  );
 
   // Store as a virtual track
   const trackId = `content-${Date.now()}`;
@@ -406,19 +447,21 @@ function handleSubtitleContent(content: string, language: string, label: string,
   // Update status
   currentTrack = {
     id: trackId,
-    url: '',
-    label: label || language || 'YouTube',
-    language: language || 'en',
+    url: "",
+    label: label || language || "YouTube",
+    language: language || "en",
     isSDH: false,
     isDefault: true,
     embedded: false,
-    source: source as 'video' | 'network' | 'user',
+    source: source as "video" | "network" | "user",
     recommendScore: 10, // High score since we already have content
   };
 
   detectedTracks = [currentTrack];
 
-  console.log(`[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${result.cues.length} cues)`);
+  console.log(
+    `[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${result.cues.length} cues)`,
+  );
 }
 
 /**
@@ -428,7 +471,7 @@ async function autoSelectBestTrack(): Promise<void> {
   if (detectedTracks.length === 0) return;
 
   const selection = selectBestTrack(detectedTracks, settings);
-  console.log('[FFProfanity] Auto-selecting track:', selection.track?.label);
+  console.log("[FFProfanity] Auto-selecting track:", selection.track?.label);
 
   if (selection.track) {
     await selectTrack(selection.track);
@@ -447,7 +490,7 @@ async function scanForTracks(): Promise<void> {
   lastScanTime = now;
 
   if (shouldLog) {
-    console.log('[FFProfanity] Scanning for subtitle tracks...');
+    console.log("[FFProfanity] Scanning for subtitle tracks...");
   }
 
   // Get tracks from video elements
@@ -461,17 +504,22 @@ async function scanForTracks(): Promise<void> {
 
   if (allTracks.length > 0) {
     if (shouldLog) {
-      console.log('[FFProfanity] Found tracks:', allTracks.length);
+      console.log("[FFProfanity] Found tracks:", allTracks.length);
     }
     addDetectedTracks(allTracks);
   }
 
   // Request any tracks detected by background script
   try {
-    const response = await browser.runtime.sendMessage({ type: 'getDetectedTracks' });
+    const response = await browser.runtime.sendMessage({
+      type: "getDetectedTracks",
+    });
     if (response?.tracks?.length > 0) {
       if (shouldLog) {
-        console.log('[FFProfanity] Background-detected tracks:', response.tracks.length);
+        console.log(
+          "[FFProfanity] Background-detected tracks:",
+          response.tracks.length,
+        );
       }
       addDetectedTracks(response.tracks);
     }
@@ -485,8 +533,9 @@ async function scanForTracks(): Promise<void> {
  */
 function addDetectedTracks(tracks: SubtitleTrack[]): void {
   // Filter out duplicates
-  const newTracks = tracks.filter(track =>
-    !detectedTracks.some(t => t.url === track.url || t.id === track.id)
+  const newTracks = tracks.filter(
+    (track) =>
+      !detectedTracks.some((t) => t.url === track.url || t.id === track.id),
   );
 
   if (newTracks.length === 0) return;
@@ -501,29 +550,33 @@ function addDetectedTracks(tracks: SubtitleTrack[]): void {
 
     if (selection.track && selection.autoSelected) {
       selectTrack(selection.track);
-      showNotification('success', '', true);
+      showNotification("success", "", true);
     }
   }
 
   // Notify popup of new tracks
-  browser.runtime.sendMessage({
-    type: 'tracksUpdated',
-    tracks: detectedTracks,
-    currentTrack,
-  }).catch(() => {
-    // Popup may not be open, ignore
-  });
+  browser.runtime
+    .sendMessage({
+      type: "tracksUpdated",
+      tracks: detectedTracks,
+      currentTrack,
+    })
+    .catch(() => {
+      // Popup may not be open, ignore
+    });
 }
 
 /**
  * Select and load a subtitle track
  */
 async function selectTrack(track: SubtitleTrack): Promise<void> {
-  console.log(`[FFProfanity] Selecting track: ${track.label} (${track.language}) from ${track.source}`);
+  console.log(
+    `[FFProfanity] Selecting track: ${track.label} (${track.language}) from ${track.source}`,
+  );
   console.log(`[FFProfanity] Track URL: ${track.url?.substring(0, 100)}...`);
 
   if (!track.url && !track.embedded) {
-    console.warn('[FFProfanity] Track has no URL and is not embedded');
+    console.warn("[FFProfanity] Track has no URL and is not embedded");
     return;
   }
 
@@ -542,13 +595,20 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
       }
 
       const content = await response.text();
-      console.log(`[FFProfanity] Received ${content.length} bytes from subtitle URL`);
-      console.log(`[FFProfanity] Content preview: ${content.substring(0, 200)}...`);
+      console.log(
+        `[FFProfanity] Received ${content.length} bytes from subtitle URL`,
+      );
+      console.log(
+        `[FFProfanity] Content preview: ${content.substring(0, 200)}...`,
+      );
 
       await handleSubtitleUpload(content, track.label);
     } catch (error) {
-      console.error('[FFProfanity] Failed to fetch subtitle track:', error);
-      showNotification('error', `Failed to load subtitles: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error("[FFProfanity] Failed to fetch subtitle track:", error);
+      showNotification(
+        "error",
+        `Failed to load subtitles: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     }
   } else if (track.embedded && videoElement) {
     // For embedded tracks, we need to read from textTracks API
@@ -561,8 +621,8 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
           id: index,
           startMs: vtCue.startTime * 1000,
           endMs: vtCue.endTime * 1000,
-          text: vtCue.text || '',
-          censoredText: '',
+          text: vtCue.text || "",
+          censoredText: "",
           hasProfanity: false,
           profanityScore: 0,
           profanityMatches: [],
@@ -577,47 +637,53 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
 /**
  * Show notification overlay
  */
-function showNotification(type: 'success' | 'error' | 'info', message: string, autoSelected = false): void {
+function showNotification(
+  type: "success" | "error" | "info",
+  message: string,
+  autoSelected = false,
+): void {
   if (!overlayContainer) return;
-  
+
   // Remove existing notification
   if (notificationEl) {
     notificationEl.remove();
   }
-  
-  notificationEl = document.createElement('div');
-  notificationEl.className = 'ffprofanity-notification';
-  
-  let content = '';
+
+  notificationEl = document.createElement("div");
+  notificationEl.className = "ffprofanity-notification";
+
+  let content = "";
   if (autoSelected && currentTrack) {
     content = `✓ Loaded: ${formatTrackLabel(currentTrack)} (auto-detected)`;
   } else {
     content = message;
   }
-  
+
   notificationEl.innerHTML = `
     <div class="ffprofanity-notification-content">
-      <span class="ffprofanity-notification-icon">${type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ'}</span>
+      <span class="ffprofanity-notification-icon">${type === "success" ? "✓" : type === "error" ? "✗" : "ℹ"}</span>
       <span class="ffprofanity-notification-text">${content}</span>
-      ${autoSelected ? `<button class="ffprofanity-notification-change">Change</button>` : ''}
+      ${autoSelected ? `<button class="ffprofanity-notification-change">Change</button>` : ""}
     </div>
   `;
-  
+
   overlayContainer.appendChild(notificationEl);
-  
+
   // Auto-hide after 3 seconds
   setTimeout(() => {
     if (notificationEl) {
-      notificationEl.classList.add('ffprofanity-notification-hidden');
+      notificationEl.classList.add("ffprofanity-notification-hidden");
       setTimeout(() => notificationEl?.remove(), 300);
     }
   }, 3000);
-  
+
   // Change button click handler
-  const changeBtn = notificationEl.querySelector('.ffprofanity-notification-change');
+  const changeBtn = notificationEl.querySelector(
+    ".ffprofanity-notification-change",
+  );
   if (changeBtn) {
-    changeBtn.addEventListener('click', () => {
-      browser.runtime.sendMessage({ type: 'openTrackSelector' });
+    changeBtn.addEventListener("click", () => {
+      browser.runtime.sendMessage({ type: "openTrackSelector" });
     });
   }
 }
@@ -627,39 +693,40 @@ function showNotification(type: 'success' | 'error' | 'info', message: string, a
  * Uses polling + mutation observer for dynamic video players
  */
 function findVideoElement(): void {
-  console.log('[FFProfanity] Looking for video element...');
-  
+  console.log("[FFProfanity] Looking for video element...");
+
   // First, try immediate search
-  const videos = document.querySelectorAll('video');
+  const videos = document.querySelectorAll("video");
   if (videos.length > 0) {
-    console.log('[FFProfanity] Found video immediately:', videos.length);
+    console.log("[FFProfanity] Found video immediately:", videos.length);
     videoElement = videos[0] as HTMLVideoElement;
     attachVideoListeners(videoElement);
     return;
   }
 
   // Poll for video element (streaming sites load dynamically)
+  // Use longer timeout for iframe scenarios where player takes time to initialize
   let pollAttempts = 0;
-  const maxPollAttempts = 20; // Poll for up to 10 seconds
+  const maxPollAttempts = 120; // Poll for up to 60 seconds (for slow iframe players)
   const pollInterval = 500;
 
   const pollTimer = setInterval(() => {
     pollAttempts++;
-    const videos = document.querySelectorAll('video');
-    
+    const videos = document.querySelectorAll("video");
+
     if (videos.length > 0) {
       console.log(`[FFProfanity] Found video after ${pollAttempts} polls`);
       clearInterval(pollTimer);
       videoElement = videos[0] as HTMLVideoElement;
       attachVideoListeners(videoElement);
-      
+
       // Start monitoring if we have cues
       if (cues.length > 0 && !isActive) {
         isActive = true;
         startMonitoring();
       }
     } else if (pollAttempts >= maxPollAttempts) {
-      console.log('[FFProfanity] No video found after max polls, stopping');
+      console.log("[FFProfanity] No video found after max polls, stopping");
       clearInterval(pollTimer);
     }
   }, pollInterval);
@@ -670,14 +737,14 @@ function findVideoElement(): void {
       for (const node of Array.from(mutation.addedNodes)) {
         // Check if the added node is a video or contains a video
         if (node instanceof HTMLVideoElement) {
-          console.log('[FFProfanity] Video element added via mutation');
+          console.log("[FFProfanity] Video element added via mutation");
           videoElement = node;
           attachVideoListeners(videoElement);
         } else if (node instanceof HTMLElement) {
           // Check descendants for video
-          const nestedVideos = Array.from(node.querySelectorAll('video'));
+          const nestedVideos = Array.from(node.querySelectorAll("video"));
           if (nestedVideos.length > 0) {
-            console.log('[FFProfanity] Video found in added subtree');
+            console.log("[FFProfanity] Video found in added subtree");
             videoElement = nestedVideos[0];
             attachVideoListeners(videoElement);
           }
@@ -687,7 +754,7 @@ function findVideoElement(): void {
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
-  console.log('[FFProfanity] Mutation observer attached');
+  console.log("[FFProfanity] Mutation observer attached");
 }
 
 /**
@@ -695,20 +762,20 @@ function findVideoElement(): void {
  */
 function attachVideoListeners(video: HTMLVideoElement): void {
   // Handle seek events - check if we landed in profanity
-  video.addEventListener('seeked', handleVideoSeeked);
-  
+  video.addEventListener("seeked", handleVideoSeeked);
+
   // Handle playback rate changes
-  video.addEventListener('ratechange', handleRateChange);
-  
+  video.addEventListener("ratechange", handleRateChange);
+
   // Handle play/pause for state tracking
-  video.addEventListener('play', () => {
+  video.addEventListener("play", () => {
     if (cues.length > 0) {
       isActive = true;
       startMonitoring();
     }
   });
-  
-  video.addEventListener('pause', () => {
+
+  video.addEventListener("pause", () => {
     // Don't stop monitoring on pause, just let the loop continue
     // This ensures we're ready when playback resumes
   });
@@ -721,15 +788,22 @@ function handleVideoSeeked(): void {
   if (!videoElement || !isActive || cues.length === 0) return;
 
   const currentTimeMs = videoElement.currentTime * 1000;
-  const profanityCue = cueIndex.findProfanityCue(currentTimeMs, settings.offsetMs);
+  const profanityCue = cueIndex.findProfanityCue(
+    currentTimeMs,
+    settings.offsetMs,
+  );
 
   // Debug: show cue count and offset
-  const profanityCount = cues.filter(c => c.hasProfanity).length;
-  console.log(`[FFProfanity] SEEK to ${videoElement.currentTime.toFixed(2)}s (${currentTimeMs}ms), offset: ${settings.offsetMs}ms, total cues: ${cues.length}, profanity cues: ${profanityCount}`);
+  const profanityCount = cues.filter((c) => c.hasProfanity).length;
+  console.log(
+    `[FFProfanity] SEEK to ${videoElement.currentTime.toFixed(2)}s (${currentTimeMs}ms), offset: ${settings.offsetMs}ms, total cues: ${cues.length}, profanity cues: ${profanityCount}`,
+  );
 
   if (profanityCue && !isMuted) {
     // Seeking into profanity - mute immediately
-    console.log(`[FFProfanity] SEEK landed in profanity cue ${profanityCue.id}, muting`);
+    console.log(
+      `[FFProfanity] SEEK landed in profanity cue ${profanityCue.id}, muting`,
+    );
     sendMuteNow();
     currentProfanityCue = profanityCue;
   } else if (!profanityCue && isMuted) {
@@ -756,19 +830,21 @@ function createOverlay(): void {
   // Check if overlay already exists
   if (overlayContainer) return;
 
-  overlayContainer = document.createElement('div');
-  overlayContainer.id = 'ffprofanity-overlay';
-  overlayContainer.className = 'ffprofanity-overlay';
+  overlayContainer = document.createElement("div");
+  overlayContainer.id = "ffprofanity-overlay";
+  overlayContainer.className = "ffprofanity-overlay";
   overlayContainer.innerHTML = `
     <style>
       .ffprofanity-overlay {
         position: fixed;
         left: 50%;
+        bottom: 15%;
         transform: translateX(-50%);
-        z-index: 2147483647;
+        z-index: 2147483647 !important;
         font-family: Arial, Helvetica, sans-serif;
         text-align: center;
         pointer-events: none;
+        isolation: isolate;
       }
       .ffprofanity-cue {
         padding: 8px 16px;
@@ -777,6 +853,8 @@ function createOverlay(): void {
         max-width: 80vw;
         line-height: 1.4;
         animation: fadeIn 0.2s ease-out;
+        background: rgba(0, 0, 0, 0.7);
+        color: #ffffff;
       }
       .ffprofanity-hidden {
         opacity: 0;
@@ -854,19 +932,43 @@ function createOverlay(): void {
     </style>
   `;
 
-  currentCueEl = document.createElement('div');
-  currentCueEl.className = 'ffprofanity-cue';
-  currentCueEl.style.display = 'none';
+  currentCueEl = document.createElement("div");
+  currentCueEl.className = "ffprofanity-cue";
+  currentCueEl.style.display = "none";
 
-  nextCuesEl = document.createElement('div');
-  nextCuesEl.className = 'ffprofanity-next-cues';
+  nextCuesEl = document.createElement("div");
+  nextCuesEl.className = "ffprofanity-next-cues";
 
   overlayContainer.appendChild(currentCueEl);
   overlayContainer.appendChild(nextCuesEl);
   document.body.appendChild(overlayContainer);
 
+  // Handle fullscreen changes - move overlay into fullscreen element
+  document.addEventListener("fullscreenchange", handleFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+
   // Apply initial display settings
   applyDisplaySettings();
+}
+
+/**
+ * Handle fullscreen changes - move overlay into fullscreen element
+ */
+function handleFullscreenChange(): void {
+  if (!overlayContainer) return;
+
+  const fullscreenElement =
+    document.fullscreenElement || (document as any).webkitFullscreenElement;
+
+  if (fullscreenElement) {
+    // Move overlay into fullscreen element
+    fullscreenElement.appendChild(overlayContainer);
+    console.log("[FFProfanity] Moved overlay into fullscreen element");
+  } else {
+    // Move overlay back to body
+    document.body.appendChild(overlayContainer);
+    console.log("[FFProfanity] Moved overlay back to body");
+  }
 }
 
 /**
@@ -877,51 +979,51 @@ function applyDisplaySettings(): void {
 
   // Font size mapping
   const fontSizes: Record<string, string> = {
-    small: '16px',
-    medium: '20px',
-    large: '26px',
-    xlarge: '32px',
+    small: "16px",
+    medium: "20px",
+    large: "26px",
+    xlarge: "32px",
   };
 
   // Position mapping
   const positions: Record<string, string> = {
-    bottom: '80px',
-    middle: '50%',
-    top: '80px',
+    bottom: "80px",
+    middle: "50%",
+    top: "80px",
   };
 
   // Apply position
-  overlayContainer.style.bottom = positions[settings.position] || '80px';
-  if (settings.position === 'middle') {
-    overlayContainer.style.top = '50%';
-    overlayContainer.style.bottom = 'auto';
-    overlayContainer.style.transform = 'translateX(-50%) translateY(-50%)';
-  } else if (settings.position === 'top') {
+  overlayContainer.style.bottom = positions[settings.position] || "80px";
+  if (settings.position === "middle") {
+    overlayContainer.style.top = "50%";
+    overlayContainer.style.bottom = "auto";
+    overlayContainer.style.transform = "translateX(-50%) translateY(-50%)";
+  } else if (settings.position === "top") {
     overlayContainer.style.top = positions.top;
-    overlayContainer.style.bottom = 'auto';
-    overlayContainer.style.transform = 'translateX(-50%)';
+    overlayContainer.style.bottom = "auto";
+    overlayContainer.style.transform = "translateX(-50%)";
   } else {
     overlayContainer.style.bottom = positions.bottom;
-    overlayContainer.style.top = 'auto';
-    overlayContainer.style.transform = 'translateX(-50%)';
+    overlayContainer.style.top = "auto";
+    overlayContainer.style.transform = "translateX(-50%)";
   }
 
   // Parse background opacity (0-100 -> 0-1)
   const bgOpacity = (settings.backgroundOpacity ?? 80) / 100;
 
   // Apply styles to current cue
-  currentCueEl.style.fontSize = fontSizes[settings.fontSize] || '20px';
-  currentCueEl.style.color = settings.fontColor || '#ffffff';
+  currentCueEl.style.fontSize = fontSizes[settings.fontSize] || "20px";
+  currentCueEl.style.color = settings.fontColor || "#ffffff";
 
   // Parse background color and apply with opacity
-  const bgColor = settings.backgroundColor || '#000000';
+  const bgColor = settings.backgroundColor || "#000000";
   const bgR = parseInt(bgColor.slice(1, 3), 16);
   const bgG = parseInt(bgColor.slice(3, 5), 16);
   const bgB = parseInt(bgColor.slice(5, 7), 16);
   currentCueEl.style.background = `rgba(${bgR}, ${bgG}, ${bgB}, ${bgOpacity})`;
 
   // Apply upcoming cues visibility
-  nextCuesEl.style.display = settings.showUpcomingCues ? 'block' : 'none';
+  nextCuesEl.style.display = settings.showUpcomingCues ? "block" : "none";
 }
 
 /**
@@ -929,20 +1031,25 @@ function applyDisplaySettings(): void {
  */
 function handleStorageChange(
   changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
-  _areaName: string
+  _areaName: string,
 ): void {
-  console.log('[FFProfanity] Storage change detected:', changes);
+  console.log("[FFProfanity] Storage change detected:", changes);
   if (changes.settings) {
     const oldSettings = settings;
     const newSettings = changes.settings.newValue as Partial<Settings>;
-    console.log('[FFProfanity] Settings changed:', { old: oldSettings, new: newSettings });
+    console.log("[FFProfanity] Settings changed:", {
+      old: oldSettings,
+      new: newSettings,
+    });
     settings = { ...settings, ...newSettings };
 
     // Recreate detector with new settings
-    const newDetectorConfig: Partial<import('../lib/detector').ProfanityConfig> = {
+    const newDetectorConfig: Partial<
+      import("../lib/detector").ProfanityConfig
+    > = {
       ...settings,
-      customSubstitutions: settings.customSubstitutions 
-        ? new Map(Object.entries(settings.customSubstitutions)) 
+      customSubstitutions: settings.customSubstitutions
+        ? new Map(Object.entries(settings.customSubstitutions))
         : undefined,
     };
     detector = createDetector(newDetectorConfig);
@@ -950,14 +1057,21 @@ function handleStorageChange(
     // Apply substitution settings
     if (settings.useSubstitutions) {
       detector.setSubstitutions(true, settings.substitutionCategory);
-      if (settings.customSubstitutions && Object.keys(settings.customSubstitutions).length > 0) {
-        detector.setCustomSubstitutions(new Map(Object.entries(settings.customSubstitutions)));
+      if (
+        settings.customSubstitutions &&
+        Object.keys(settings.customSubstitutions).length > 0
+      ) {
+        detector.setCustomSubstitutions(
+          new Map(Object.entries(settings.customSubstitutions)),
+        );
       }
     }
 
     // Re-compute profanity windows if sensitivity changed
     if (oldSettings.sensitivity !== settings.sensitivity) {
-      console.log(`[FFProfanity] Sensitivity changed from ${oldSettings.sensitivity} to ${settings.sensitivity}, re-computing windows`);
+      console.log(
+        `[FFProfanity] Sensitivity changed from ${oldSettings.sensitivity} to ${settings.sensitivity}, re-computing windows`,
+      );
       for (const cue of cues) {
         if (cue.hasProfanity && cue.profanityMatches.length > 0) {
           cue.profanityWindows = computeProfanityWindows(
@@ -966,7 +1080,7 @@ function handleStorageChange(
             cue.endMs,
             cue.text,
             cue.profanityMatches,
-            settings.sensitivity
+            settings.sensitivity,
           );
         }
       }
@@ -975,15 +1089,24 @@ function handleStorageChange(
     }
 
     // Re-process censored text if substitution settings changed
-    if (oldSettings.useSubstitutions !== settings.useSubstitutions ||
-        oldSettings.substitutionCategory !== settings.substitutionCategory) {
-      console.log(`[FFProfanity] Substitution settings changed from ${oldSettings.useSubstitutions}/${oldSettings.substitutionCategory} to ${settings.useSubstitutions}/${settings.substitutionCategory}, re-processing cue text`);
-      console.log(`[FFProfanity] Detector useSubstitutions:`, detector['useSubstitutions']);
+    if (
+      oldSettings.useSubstitutions !== settings.useSubstitutions ||
+      oldSettings.substitutionCategory !== settings.substitutionCategory
+    ) {
+      console.log(
+        `[FFProfanity] Substitution settings changed from ${oldSettings.useSubstitutions}/${oldSettings.substitutionCategory} to ${settings.useSubstitutions}/${settings.substitutionCategory}, re-processing cue text`,
+      );
+      console.log(
+        `[FFProfanity] Detector useSubstitutions:`,
+        detector["useSubstitutions"],
+      );
       for (const cue of cues) {
         if (cue.hasProfanity && cue.profanityMatches.length > 0) {
           const detection = detector.detect(cue.text);
           cue.censoredText = detection.censoredText;
-          console.log(`[FFProfanity] Re-processed cue ${cue.id}: "${cue.text.substring(0, 30)}..." -> "${cue.censoredText.substring(0, 30)}..."`);
+          console.log(
+            `[FFProfanity] Re-processed cue ${cue.id}: "${cue.text.substring(0, 30)}..." -> "${cue.censoredText.substring(0, 30)}..."`,
+          );
         }
       }
     }
@@ -1018,74 +1141,77 @@ function handleStorageChange(
  * Handle messages from background and popup
  */
 function handleMessage(message: unknown): Promise<unknown> {
-  if (!message || typeof message !== 'object') return Promise.resolve();
+  if (!message || typeof message !== "object") return Promise.resolve();
 
   const msg = message as Record<string, unknown>;
 
   switch (msg.type) {
-    case 'uploadCues':
+    case "uploadCues":
       const content = msg.content as string;
       const filename = msg.filename as string | undefined;
       handleSubtitleUpload(content, filename);
       break;
 
-    case 'updateOffset':
+    case "updateOffset":
       const offset = msg.offsetMs as number;
-      if (typeof offset === 'number') {
+      if (typeof offset === "number") {
         settings.offsetMs = offset;
-        storage.setSetting('offsetMs', offset);
+        storage.setSetting("offsetMs", offset);
       }
       break;
 
-    case 'updateSettings':
+    case "updateSettings":
       // Settings updated from options page
-      console.log('[FFProfanity] Received updateSettings message:', msg.settings);
+      console.log(
+        "[FFProfanity] Received updateSettings message:",
+        msg.settings,
+      );
       if (msg.settings) {
-        handleStorageChange({ settings: { newValue: msg.settings } }, 'local');
+        handleStorageChange({ settings: { newValue: msg.settings } }, "local");
       }
       break;
 
-    case 'enable':
+    case "enable":
       isActive = true;
       startMonitoring();
       break;
 
-    case 'disable':
+    case "disable":
       isActive = false;
       stopMonitoring();
       break;
 
-    case 'getStatus':
+    case "getStatus":
       return Promise.resolve({
         active: isActive,
         cueCount: cues.length,
-        profanityCount: cues.filter(c => c.hasProfanity).length,
+        profanityCount: cues.filter((c) => c.hasProfanity).length,
         hasVideo: !!videoElement,
         currentTrack,
         detectedTracks,
       });
 
-    case 'trackDetected':
+    case "trackDetected":
       // New track detected by background script
       if (msg.track) {
         addDetectedTracks([msg.track as SubtitleTrack]);
       }
       break;
 
-    case 'selectTrack':
+    case "selectTrack":
       // User selected a track from popup
       if (msg.trackId) {
-        const track = detectedTracks.find(t => t.id === msg.trackId);
+        const track = detectedTracks.find((t) => t.id === msg.trackId);
         if (track) {
           selectTrack(track);
         }
       }
       break;
 
-    case 'getTracks':
+    case "getTracks":
       // Return available tracks to popup
       return Promise.resolve({
-        type: 'tracks',
+        type: "tracks",
         tracks: detectedTracks,
         currentTrack,
       });
@@ -1097,22 +1223,29 @@ function handleMessage(message: unknown): Promise<unknown> {
 /**
  * Handle uploaded subtitle file
  */
-async function handleSubtitleUpload(content: string, filename?: string): Promise<void> {
-  console.log(`[FFProfanity] Parsing subtitle content (${content.length} bytes)`);
+async function handleSubtitleUpload(
+  content: string,
+  filename?: string,
+): Promise<void> {
+  console.log(
+    `[FFProfanity] Parsing subtitle content (${content.length} bytes)`,
+  );
 
   const result = parseSubtitle(content);
 
-  console.log(`[FFProfanity] Detected format: ${result.format}, cues: ${result.cues.length}, errors: ${result.errors.length}`);
+  console.log(
+    `[FFProfanity] Detected format: ${result.format}, cues: ${result.cues.length}, errors: ${result.errors.length}`,
+  );
 
   if (result.errors.length > 0) {
-    console.error('[FFProfanity] Parse errors:', result.errors);
-    showNotification('error', result.errors.join('; '));
+    console.error("[FFProfanity] Parse errors:", result.errors);
+    showNotification("error", result.errors.join("; "));
     return;
   }
 
   if (result.cues.length === 0) {
-    console.error('[FFProfanity] No cues found in subtitle content');
-    showNotification('error', 'No subtitles found in file');
+    console.error("[FFProfanity] No cues found in subtitle content");
+    showNotification("error", "No subtitles found in file");
     return;
   }
 
@@ -1122,41 +1255,45 @@ async function handleSubtitleUpload(content: string, filename?: string): Promise
   // Create a track entry for user uploads
   const userTrack: SubtitleTrack = {
     id: `user-upload-${Date.now()}`,
-    label: filename || 'Uploaded subtitles',
-    language: 'unknown',
+    label: filename || "Uploaded subtitles",
+    language: "unknown",
     isSDH: false,
     isDefault: true,
-    source: 'user',
+    source: "user",
     embedded: false,
     recommendScore: 10, // User uploads should be preferred
   };
 
   // Set as current track (in-memory only)
-  if (!detectedTracks.some(t => t.id === userTrack.id)) {
+  if (!detectedTracks.some((t) => t.id === userTrack.id)) {
     detectedTracks.push(userTrack);
   }
   currentTrack = userTrack;
 
-  console.log(`[FFProfanity] Created track for uploaded file: ${userTrack.label}`);
+  console.log(
+    `[FFProfanity] Created track for uploaded file: ${userTrack.label}`,
+  );
 }
 
 /**
  * Process cues with profanity detection
  */
 function processCues(newCues: Cue[]): void {
-  console.log(`[FFProfanity] Processing ${newCues.length} cues, useSubstitutions: ${settings.useSubstitutions}, category: ${settings.substitutionCategory}`);
+  console.log(
+    `[FFProfanity] Processing ${newCues.length} cues, useSubstitutions: ${settings.useSubstitutions}, category: ${settings.substitutionCategory}`,
+  );
 
-  cues = newCues.map(cue => {
+  cues = newCues.map((cue) => {
     const detection = detector.detect(cue.text);
 
     // Debug: log any cue containing "bullshit"
-    if (cue.text.toLowerCase().includes('bullshit')) {
+    if (cue.text.toLowerCase().includes("bullshit")) {
       console.log(`[FFProfanity] DEBUG bullshit cue ${cue.id}:`, {
         text: cue.text,
         hasProfanity: detection.hasProfanity,
         score: detection.score,
         matches: detection.matches,
-        censoredText: detection.censoredText
+        censoredText: detection.censoredText,
       });
     }
 
@@ -1169,14 +1306,14 @@ function processCues(newCues: Cue[]): void {
     };
 
     // Compute profanity windows for medium/low sensitivity modes
-    if (detection.hasProfanity && settings.sensitivity !== 'high') {
+    if (detection.hasProfanity && settings.sensitivity !== "high") {
       processedCue.profanityWindows = computeProfanityWindows(
         cue.id,
         cue.startMs,
         cue.endMs,
         cue.text,
         detection.matches,
-        settings.sensitivity
+        settings.sensitivity,
       );
     }
 
@@ -1187,30 +1324,49 @@ function processCues(newCues: Cue[]): void {
   cueIndex.build(cues);
 
   // Log summary
-  const profanityCues = cues.filter(c => c.hasProfanity);
-  console.log(`[FFProfanity] Processed ${cues.length} cues, ${profanityCues.length} with profanity`);
-  if (settings.sensitivity !== 'high' && profanityCues.length > 0) {
-    const windowCount = profanityCues.reduce((sum, c) => sum + (c.profanityWindows?.length || 0), 0);
-    console.log(`[FFProfanity] Computed ${windowCount} profanity windows for sensitivity '${settings.sensitivity}'`);
+  const profanityCues = cues.filter((c) => c.hasProfanity);
+  console.log(
+    `[FFProfanity] Processed ${cues.length} cues, ${profanityCues.length} with profanity`,
+  );
+  if (settings.sensitivity !== "high" && profanityCues.length > 0) {
+    const windowCount = profanityCues.reduce(
+      (sum, c) => sum + (c.profanityWindows?.length || 0),
+      0,
+    );
+    console.log(
+      `[FFProfanity] Computed ${windowCount} profanity windows for sensitivity '${settings.sensitivity}'`,
+    );
   }
 
   // Log first few profanity cues for verification (with timestamps)
   if (profanityCues.length > 0) {
-    console.log(`[FFProfanity] First 10 profanity cues:`,
-      profanityCues.slice(0, 10).map(c => ({
+    console.log(
+      `[FFProfanity] First 10 profanity cues:`,
+      profanityCues.slice(0, 10).map((c) => ({
         id: c.id,
-        time: `${Math.floor(c.startMs / 60000)}:${Math.floor((c.startMs % 60000) / 1000).toString().padStart(2, '0')}`,
+        time: `${Math.floor(c.startMs / 60000)}:${Math.floor(
+          (c.startMs % 60000) / 1000,
+        )
+          .toString()
+          .padStart(2, "0")}`,
         text: c.text.substring(0, 40),
         hasProfanity: c.hasProfanity,
-        windows: c.profanityWindows?.length || 0
-      }))
+        windows: c.profanityWindows?.length || 0,
+      })),
     );
   }
 
   // Start monitoring if we have a video
   if (cues.length > 0 && videoElement) {
+    console.log(
+      `[FFProfanity] Starting monitoring: ${cues.length} cues, videoElement=${!!videoElement}`,
+    );
     isActive = true;
     startMonitoring();
+  } else {
+    console.log(
+      `[FFProfanity] NOT starting monitoring: cues=${cues.length}, videoElement=${!!videoElement}`,
+    );
   }
 }
 
@@ -1218,15 +1374,27 @@ function processCues(newCues: Cue[]): void {
  * Start monitoring playback
  */
 function startMonitoring(): void {
-  if (!videoElement || animationFrameId) return;
-  
+  if (!videoElement) {
+    console.log("[FFProfanity] startMonitoring: no videoElement, returning");
+    return;
+  }
+  if (animationFrameId) {
+    console.log("[FFProfanity] startMonitoring: already running");
+    return;
+  }
+
+  console.log("[FFProfanity] startMonitoring: starting update loop");
+  console.log(
+    `[FFProfanity] Video state: paused=${videoElement.paused}, currentTime=${videoElement.currentTime?.toFixed(2)}, duration=${videoElement.duration?.toFixed(2)}, readyState=${videoElement.readyState}`,
+  );
+
   const updateLoop = () => {
     if (!isActive || !videoElement) return;
-    
+
     updatePlayback(videoElement.currentTime * 1000);
     animationFrameId = requestAnimationFrame(updateLoop);
   };
-  
+
   animationFrameId = requestAnimationFrame(updateLoop);
 }
 
@@ -1245,7 +1413,7 @@ function stopMonitoring(): void {
  */
 function debounce<T extends (...args: unknown[]) => void>(
   fn: T,
-  delay: number
+  delay: number,
 ): (...args: Parameters<T>) => void {
   let timer: ReturnType<typeof setTimeout>;
   return (...args: Parameters<T>) => {
@@ -1259,12 +1427,14 @@ function debounce<T extends (...args: unknown[]) => void>(
  */
 function sendMuteNow(): void {
   if (isMuted) return; // Already muted
-  
-  console.log(`[FFProfanity] MUTE: ${currentProfanityCue ? `cue ${currentProfanityCue.id}` : 'unknown'} at ${videoElement?.currentTime?.toFixed(2)}s`);
-  
+
+  console.log(
+    `[FFProfanity] MUTE: ${currentProfanityCue ? `cue ${currentProfanityCue.id}` : "unknown"} at ${videoElement?.currentTime?.toFixed(2)}s`,
+  );
+
   browser.runtime.sendMessage({
-    type: 'muteNow',
-    reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : 'unknown',
+    type: "muteNow",
+    reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown",
     expectedUnmuteAt: currentProfanityCue?.endMs || 0,
   });
   isMuted = true;
@@ -1275,11 +1445,13 @@ function sendMuteNow(): void {
  */
 function sendUnmuteNow(): void {
   if (!isMuted) return; // Already unmuted
-  
-  console.log(`[FFProfanity] UNMUTE at ${videoElement?.currentTime?.toFixed(2)}s`);
-  
+
+  console.log(
+    `[FFProfanity] UNMUTE at ${videoElement?.currentTime?.toFixed(2)}s`,
+  );
+
   browser.runtime.sendMessage({
-    type: 'unmuteNow',
+    type: "unmuteNow",
   });
   isMuted = false;
 }
@@ -1293,9 +1465,22 @@ function updatePlayback(currentTimeMs: number): void {
   // Find current subtitle cue and profanity status
   const currentCue = cueIndex.findActive(currentTimeMs, settings.offsetMs);
 
+  // Debug: log periodically (every 5 seconds of video time)
+  if (
+    Math.floor(currentTimeMs / 5000) !== Math.floor((currentTimeMs - 16) / 5000)
+  ) {
+    console.log(
+      `[FFProfanity] updatePlayback: time=${(currentTimeMs / 1000).toFixed(1)}s, cue=${currentCue ? currentCue.id : "none"}, isActive=${isActive}, cues=${cues.length}`,
+    );
+  }
+
   // Handle muting based on sensitivity setting
   // HIGH: mute entire cue, MEDIUM/LOW: mute only profanity word windows
-  const muteState = cueIndex.getMuteState(currentTimeMs, settings.offsetMs, settings.sensitivity);
+  const muteState = cueIndex.getMuteState(
+    currentTimeMs,
+    settings.offsetMs,
+    settings.sensitivity,
+  );
 
   if (muteState.shouldMute && !isMuted) {
     // Entering a profanity zone
@@ -1314,29 +1499,37 @@ function updatePlayback(currentTimeMs: number): void {
       : sanitizeText(currentCue.text);
 
     currentCueEl.textContent = displayText;
-    currentCueEl.style.display = 'block';
-    currentCueEl.classList.remove('ffprofanity-hidden');
+    currentCueEl.style.display = "block";
+    currentCueEl.classList.remove("ffprofanity-hidden");
 
     // Show next cues preview if enabled
-    if (settings.showUpcomingCues && settings.upcomingCuesCount > 0 && nextCuesEl) {
-      const nextCues = cueIndex.getNextCues(currentTimeMs, settings.upcomingCuesCount, settings.offsetMs);
+    if (
+      settings.showUpcomingCues &&
+      settings.upcomingCuesCount > 0 &&
+      nextCuesEl
+    ) {
+      const nextCues = cueIndex.getNextCues(
+        currentTimeMs,
+        settings.upcomingCuesCount,
+        settings.offsetMs,
+      );
       if (nextCues.length > 0) {
         const previews = nextCues
-          .map(c => {
+          .map((c) => {
             const time = formatTime(c.startMs);
             const text = c.hasProfanity ? c.censoredText : sanitizeText(c.text);
-            return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}</div>`;
+            return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}</div>`;
           })
-          .join('');
+          .join("");
         nextCuesEl.innerHTML = previews;
       } else {
-        nextCuesEl.innerHTML = '';
+        nextCuesEl.innerHTML = "";
       }
     } else if (nextCuesEl) {
-      nextCuesEl.innerHTML = '';
+      nextCuesEl.innerHTML = "";
     }
   } else {
-    currentCueEl.classList.add('ffprofanity-hidden');
+    currentCueEl.classList.add("ffprofanity-hidden");
   }
 }
 
@@ -1348,20 +1541,20 @@ function formatTime(ms: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  
+
   if (hours > 0) {
-    return `${hours}:${minutes.toString(10).padStart(2, '0')}:${seconds.toString(10).padStart(2, '0')}`;
+    return `${hours}:${minutes.toString(10).padStart(2, "0")}:${seconds.toString(10).padStart(2, "0")}`;
   }
-  return `${minutes}:${seconds.toString(10).padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString(10).padStart(2, "0")}`;
 }
 
 /**
  * Handle file input from options page
  */
 function setupFileInput(): void {
-  document.addEventListener('input', (event) => {
+  document.addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement;
-    if (target.type === 'file' && target.accept?.includes('.srt,.vtt,.ass')) {
+    if (target.type === "file" && target.accept?.includes(".srt,.vtt,.ass")) {
       const file = target.files?.[0];
       if (file) {
         const reader = new FileReader();
@@ -1376,19 +1569,19 @@ function setupFileInput(): void {
 }
 
 // Initialize on DOM ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
 } else {
   init();
 }
 
 // Keyboard shortcuts
-document.addEventListener('keydown', (event) => {
-  if (event.altKey && event.key === 'ArrowLeft') {
+document.addEventListener("keydown", (event) => {
+  if (event.altKey && event.key === "ArrowLeft") {
     settings.offsetMs -= 500;
-    storage.setSetting('offsetMs', settings.offsetMs);
-  } else if (event.altKey && event.key === 'ArrowRight') {
+    storage.setSetting("offsetMs", settings.offsetMs);
+  } else if (event.altKey && event.key === "ArrowRight") {
     settings.offsetMs += 500;
-    storage.setSetting('offsetMs', settings.offsetMs);
+    storage.setSetting("offsetMs", settings.offsetMs);
   }
 });

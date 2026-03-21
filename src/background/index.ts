@@ -3,36 +3,66 @@
  * Handles mute/unmute operations, message routing, and subtitle detection
  */
 
-import type { MuteNowMessage, UnmuteNowMessage, CuesMessage, Settings, SubtitleTrack } from '../types';
-import { isSubtitleUrl, detectSubtitleFormat } from '../lib/extractor';
+import type {
+  MuteNowMessage,
+  UnmuteNowMessage,
+  CuesMessage,
+  Settings,
+  SubtitleTrack,
+} from "../types";
+import { isSubtitleUrl, detectSubtitleFormat } from "../lib/extractor";
 
 // Active mute states per tab
-const muteStates = new Map<number, {
-  muted: boolean;
-  reasonId: string | null;
-  expectedUnmuteAt: number | null;
-  safetyTimer: ReturnType<typeof setTimeout> | null;
-}>();
+const muteStates = new Map<
+  number,
+  {
+    muted: boolean;
+    reasonId: string | null;
+    expectedUnmuteAt: number | null;
+    safetyTimer: ReturnType<typeof setTimeout> | null;
+  }
+>();
 
 // Detected subtitle URLs per tab
 const detectedSubtitles = new Map<number, SubtitleTrack[]>();
 
 // Pending cues and settings cache
-const cuesCache = new Map<number, {
-  cues: CuesMessage['cues'];
-  settings: Settings;
-}>();
+const cuesCache = new Map<
+  number,
+  {
+    cues: CuesMessage["cues"];
+    settings: Settings;
+  }
+>();
+
+// Aggregated status per tab (collected from all frames)
+const tabStatus = new Map<
+  number,
+  {
+    hasVideo: boolean;
+    active: boolean;
+    cueCount: number;
+    profanityCount: number;
+    currentTrack: SubtitleTrack | null;
+    detectedTracks: SubtitleTrack[];
+    lastUpdated: number;
+  }
+>();
 
 /**
  * Mute a tab
  */
-async function muteTab(tabId: number, reasonId: string, expectedUnmuteAt: number): Promise<void> {
+async function muteTab(
+  tabId: number,
+  reasonId: string,
+  expectedUnmuteAt: number,
+): Promise<void> {
   // Clear any existing safety timer
   const state = muteStates.get(tabId);
   if (state?.safetyTimer) {
     clearTimeout(state.safetyTimer);
   }
-  
+
   // Set muted state
   muteStates.set(tabId, {
     muted: true,
@@ -40,25 +70,26 @@ async function muteTab(tabId: number, reasonId: string, expectedUnmuteAt: number
     expectedUnmuteAt,
     safetyTimer: null,
   });
-  
+
   try {
     await browser.tabs.update(tabId, { muted: true });
     console.log(`Tab ${tabId} muted for reason ${reasonId}`);
   } catch (error) {
     console.error(`Failed to mute tab ${tabId}:`, error);
   }
-  
+
   // Set safety timer in case unmute message never arrives
   const safetyDelay = expectedUnmuteAt - Date.now() + 1000; // 1 second buffer
-  if (safetyDelay > 0 && safetyDelay < 60000) { // Max 1 minute safety timer
+  if (safetyDelay > 0 && safetyDelay < 60000) {
+    // Max 1 minute safety timer
     const timer = setTimeout(async () => {
       const currentState = muteStates.get(tabId);
       if (currentState?.muted && currentState.reasonId === reasonId) {
         console.log(`Safety timer triggered, unmuting tab ${tabId}`);
-        await unmuteTab(tabId, 'safety-timer');
+        await unmuteTab(tabId, "safety-timer");
       }
     }, safetyDelay);
-    
+
     const currentState = muteStates.get(tabId);
     if (currentState) {
       currentState.safetyTimer = timer;
@@ -71,12 +102,12 @@ async function muteTab(tabId: number, reasonId: string, expectedUnmuteAt: number
  */
 async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
   const state = muteStates.get(tabId);
-  
+
   // Clear safety timer
   if (state?.safetyTimer) {
     clearTimeout(state.safetyTimer);
   }
-  
+
   // Only unmute if the reason matches or is from safety timer
   if (state?.muted) {
     try {
@@ -86,7 +117,7 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
       console.error(`Failed to unmute tab ${tabId}:`, error);
     }
   }
-  
+
   muteStates.set(tabId, {
     muted: false,
     reasonId: null,
@@ -96,10 +127,107 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
 }
 
 /**
+ * Get aggregated status for a tab (from all frames)
+ * Queries each frame individually to collect video/subtitle status
+ */
+async function getAggregatedStatus(tabId: number): Promise<{
+  active: boolean;
+  cueCount: number;
+  profanityCount: number;
+  hasVideo: boolean;
+  currentTrack: SubtitleTrack | null;
+  detectedTracks: SubtitleTrack[];
+}> {
+  let hasVideo = false;
+  let active = false;
+  let totalCues = 0;
+  let totalProfanity = 0;
+  let currentTrack: SubtitleTrack | null = null;
+  const allTracks: SubtitleTrack[] = [];
+
+  try {
+    // Get all frames in the tab
+    const frames = await browser.webNavigation.getAllFrames({ tabId });
+
+    // Query each frame
+    const framePromises = frames.map(async (frame) => {
+      try {
+        const response = await browser.tabs.sendMessage(
+          tabId,
+          { type: "getStatus" },
+          { frameId: frame.frameId },
+        );
+        return response;
+      } catch {
+        // Frame might not have content script loaded, ignore
+        return null;
+      }
+    });
+
+    const results = await Promise.all(framePromises);
+
+    for (const status of results) {
+      if (!status || typeof status !== "object") continue;
+
+      const s = status as {
+        active?: boolean;
+        cueCount?: number;
+        profanityCount?: number;
+        hasVideo?: boolean;
+        currentTrack?: SubtitleTrack | null;
+        detectedTracks?: SubtitleTrack[];
+      };
+
+      if (s.hasVideo) hasVideo = true;
+      if (s.active) active = true;
+      if (s.cueCount) totalCues = Math.max(totalCues, s.cueCount);
+      if (s.profanityCount)
+        totalProfanity = Math.max(totalProfanity, s.profanityCount);
+      if (s.currentTrack && !currentTrack) currentTrack = s.currentTrack;
+      if (s.detectedTracks) {
+        for (const track of s.detectedTracks) {
+          if (
+            !allTracks.some((t) => t.url === track.url || t.id === track.id)
+          ) {
+            allTracks.push(track);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error getting frame status:", error);
+  }
+
+  // Fallback to cached status if no video found
+  if (!hasVideo) {
+    const cached = tabStatus.get(tabId);
+    if (cached?.hasVideo) {
+      return {
+        active: cached.active,
+        cueCount: cached.cueCount,
+        profanityCount: cached.profanityCount,
+        hasVideo: cached.hasVideo,
+        currentTrack: cached.currentTrack,
+        detectedTracks: cached.detectedTracks,
+      };
+    }
+  }
+
+  return {
+    active,
+    cueCount: totalCues,
+    profanityCount: totalProfanity,
+    hasVideo,
+    currentTrack,
+    detectedTracks: allTracks,
+  };
+}
+
+/**
  * Handle messages from content scripts
  */
 browser.runtime.onMessage.addListener((message: unknown, sender) => {
-  if (!message || typeof message !== 'object') return;
+  if (!message || typeof message !== "object") return;
 
   const msg = message as Record<string, unknown>;
   const tabId = sender.tab?.id;
@@ -109,36 +237,89 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
   console.log(`Received message from tab ${tabId}:`, msg.type);
 
   switch (msg.type) {
-    case 'muteNow': {
+    case "muteNow": {
       const muteMsg = message as MuteNowMessage;
       muteTab(tabId, muteMsg.reasonId, muteMsg.expectedUnmuteAt);
       break;
     }
 
-    case 'unmuteNow': {
-      unmuteTab(tabId, 'unmute-request');
+    case "unmuteNow": {
+      unmuteTab(tabId, "unmute-request");
       break;
     }
 
-    case 'getStatus': {
+    case "getStatus": {
       const state = muteStates.get(tabId);
       return Promise.resolve({
-        type: 'status',
+        type: "status",
         muted: state?.muted ?? false,
         tabId,
       });
     }
 
-    case 'getDetectedTracks': {
+    case "getAggregatedStatus": {
+      // Popup requests aggregated status from all frames
+      return getAggregatedStatus(tabId);
+    }
+
+    case "frameStatus": {
+      // Content script (from any frame) reports its status
+      // This allows us to track which frames have videos
+      const frameStatus = msg as {
+        hasVideo: boolean;
+        active: boolean;
+        cueCount: number;
+        profanityCount: number;
+        currentTrack: SubtitleTrack | null;
+        detectedTracks: SubtitleTrack[];
+      };
+
+      // Update cached status for this tab
+      const existing = tabStatus.get(tabId) || {
+        hasVideo: false,
+        active: false,
+        cueCount: 0,
+        profanityCount: 0,
+        currentTrack: null,
+        detectedTracks: [],
+        lastUpdated: 0,
+      };
+
+      // Merge status (any frame with video means tab has video)
+      tabStatus.set(tabId, {
+        hasVideo: existing.hasVideo || frameStatus.hasVideo,
+        active: existing.active || frameStatus.active,
+        cueCount: Math.max(existing.cueCount, frameStatus.cueCount),
+        profanityCount: Math.max(
+          existing.profanityCount,
+          frameStatus.profanityCount,
+        ),
+        currentTrack: frameStatus.currentTrack || existing.currentTrack,
+        detectedTracks: [
+          ...existing.detectedTracks,
+          ...frameStatus.detectedTracks.filter(
+            (t) =>
+              !existing.detectedTracks.some(
+                (et) => et.url === t.url || et.id === t.id,
+              ),
+          ),
+        ],
+        lastUpdated: Date.now(),
+      });
+
+      return Promise.resolve({ success: true });
+    }
+
+    case "getDetectedTracks": {
       const tracks = detectedSubtitles.get(tabId) || [];
       return Promise.resolve({
-        type: 'detectedTracks',
+        type: "detectedTracks",
         tracks,
         tabId,
       });
     }
 
-    case 'clearDetectedTracks': {
+    case "clearDetectedTracks": {
       detectedSubtitles.delete(tabId);
       return Promise.resolve({ success: true });
     }
@@ -151,61 +332,63 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
 browser.webRequest.onCompleted.addListener(
   (details) => {
     const url = details.url;
-    
+
     // Check if this looks like a subtitle file
     if (!isSubtitleUrl(url)) return;
-    
+
     const tabId = details.tabId;
     if (tabId < 0) return; // Not a valid tab
-    
+
     // Get content type from response headers
     const contentType = details.responseHeaders?.find(
-      h => h.name.toLowerCase() === 'content-type'
+      (h) => h.name.toLowerCase() === "content-type",
     )?.value;
-    
+
     const format = detectSubtitleFormat(url, contentType);
-    
+
     // Extract language from URL or filename
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
     const language = langMatch ? langMatch[1].toLowerCase() : undefined;
-    
+
     // Extract label from filename
     const filenameMatch = url.match(/\/([^\/]+)\.(?:vtt|srt|ass|ssa)$/i);
-    const label = filenameMatch 
-      ? filenameMatch[1].replace(/[_\-\+]/g, ' ') 
+    const label = filenameMatch
+      ? filenameMatch[1].replace(/[_\-\+]/g, " ")
       : `Subtitle (${format.toUpperCase()})`;
-    
+
     const track: SubtitleTrack = {
       id: `network-${tabId}-${Date.now()}`,
       label,
-      language: language || '',
+      language: language || "",
       isSDH: /sdh|cc|hearing|deaf/i.test(label),
       isDefault: false,
       url,
       embedded: false,
-      source: 'network',
+      source: "network",
       recommendScore: 0,
     };
-    
+
     // Add to detected subtitles for this tab
     const existing = detectedSubtitles.get(tabId) || [];
-    
+
     // Avoid duplicates
-    if (!existing.some(t => t.url === track.url)) {
+    if (!existing.some((t) => t.url === track.url)) {
       detectedSubtitles.set(tabId, [...existing, track]);
       console.log(`Detected subtitle: ${label} (${url})`);
-      
+
       // Notify content script of new track
-      browser.tabs.sendMessage(tabId, {
-        type: 'trackDetected',
-        track,
-      }).catch(() => {
-        // Content script may not be ready, ignore
-      });
+      browser.tabs
+        .sendMessage(tabId, {
+          type: "trackDetected",
+          track,
+        })
+        .catch(() => {
+          // Content script may not be ready, ignore
+        });
     }
   },
-  { urls: ['<all_urls>'] },
-  ['responseHeaders']
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"],
 );
 
 /**
@@ -215,19 +398,21 @@ browser.tabs.onRemoved.addListener((tabId) => {
   muteStates.delete(tabId);
   cuesCache.delete(tabId);
   detectedSubtitles.delete(tabId);
+  tabStatus.delete(tabId);
 });
 
 /**
  * Handle tab updates - clear detected subtitles on navigation
  */
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') {
+  if (changeInfo.status === "loading") {
     // Clear detected subtitles when navigating to a new page
     detectedSubtitles.delete(tabId);
+    tabStatus.delete(tabId);
   }
 });
 
 // Initialize extension
 browser.runtime.onInstalled.addListener((details) => {
-  console.log('Profanity Filter installed:', details.reason);
+  console.log("Profanity Filter installed:", details.reason);
 });
