@@ -48,6 +48,9 @@ let notificationEl: HTMLDivElement | null = null;
 let videoElement: HTMLVideoElement | null = null;
 let isActive = false;
 let animationFrameId: ReturnType<typeof requestAnimationFrame> | null = null;
+
+// Live TV timing state - track previous firstCue to detect broadcast-absolute pattern
+let previousFirstCueMs: number | null = null;
 let lastCueId: number | null = null;
 let currentProfanityCue: Cue | null = null; // Track current profanity cue for mute state
 let playbackRate: number = 1.0; // Track playback speed
@@ -339,10 +342,14 @@ function injectApiInterceptor(): void {
     })();
   `;
 
-  (document.head || document.documentElement).appendChild(script);
+  const scriptContent = script.textContent;
   script.remove();
 
-  // Listen for messages from the injected script
+  const fallbackScript = document.createElement("script");
+  fallbackScript.textContent = scriptContent;
+  (document.head || document.documentElement).appendChild(fallbackScript);
+  fallbackScript.remove();
+
   window.addEventListener("message", handleInterceptedMessage);
 }
 
@@ -357,14 +364,26 @@ function handleInterceptedMessage(event: MessageEvent): void {
 
   // Handle subtitle content (fetched in page context with cookies)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
-    const { content, language, label, source } = event.data;
+    const { content, language, label, source, segmentLoadTime, streamType } =
+      event.data;
     console.log(
       `[FFProfanity] Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`,
     );
 
     if (content && content.length > 10) {
-      // Parse and use directly
-      handleSubtitleContent(content, language, label, source);
+      const segmentLoadTimeMs = segmentLoadTime
+        ? Math.round(segmentLoadTime * 1000)
+        : videoElement
+          ? Math.round(videoElement.currentTime * 1000)
+          : undefined;
+      handleSubtitleContent(
+        content,
+        language,
+        label,
+        source,
+        segmentLoadTimeMs,
+        streamType,
+      );
     }
     return;
   }
@@ -413,54 +432,163 @@ function handleInterceptedMessage(event: MessageEvent): void {
 }
 
 /**
- * Handle subtitle content received from page context (YouTube)
- * This bypasses the need to fetch with credentials from content script
+ * Handle subtitle content received from page context (YouTube, PlutoTV, etc.)
+ * For HLS streams, mtp (media time position) in URL indicates segment timeline position.
  */
 function handleSubtitleContent(
   content: string,
   language: string,
   label: string,
   source: string,
+  segmentLoadTimeMs?: number,
+  streamType?: string,
 ): void {
-  // Parse the content
-  const result = parseSubtitle(content);
+  const rawResult = parseSubtitle(content, 0);
 
-  if (result.cues.length === 0) {
-    console.error("[FFProfanity] Parse errors:", result.errors);
+  if (rawResult.cues.length === 0) {
+    console.error("[FFProfanity] Parse errors:", rawResult.errors);
     showNotification(
       "error",
-      `Failed to parse subtitle: ${result.errors.join(", ")}`,
+      `Failed to parse subtitle: ${rawResult.errors.join(", ")}`,
     );
     return;
   }
 
+  let finalCues = rawResult.cues;
+
+  // TIMING ANALYSIS:
+  // - VTT timestamps are already in the content's native timeline (movie for VOD, broadcast for live)
+  // - The mtp parameter indicates HLS playlist position, NOT a timeline offset to add
+  // - For Live TV with short segments + broadcast-absolute timestamps: convert to segment-relative
+  // - For VOD: timestamps are already correct in movie timeline, no offset needed
+
+  // Detect Live TV from streamType OR from video characteristics
+  // Live TV segments are short (~30s) with broadcast-absolute timestamps (>> video duration)
+  let isLiveTV = streamType === "live";
+  const firstCueMs = rawResult.cues[0]?.startMs || 0;
+  const videoDurationMs = videoElement ? videoElement.duration * 1000 : 0;
+
+  // Detect broadcast-absolute timestamps by tracking firstCue across segments
+  // Broadcast-absolute: firstCue INCREASES across segments (6s → 11s → 14s → 18s...)
+  // Segment-relative: firstCue RESETS to ~0 each segment (0s → 0s → 0s...)
+  const isIncreasingTimestamps =
+    previousFirstCueMs !== null && firstCueMs > previousFirstCueMs;
+  previousFirstCueMs = firstCueMs;
+
+  // Fallback: Detect Live TV when streamType is missing but video characteristics indicate live TV
+  // Live TV: short video segments (< 60s) with broadcast-absolute timestamps (>> video duration)
+  // VOD: longer video (> 60s) with movie timeline timestamps
+  // Broadcast-absolute detection: firstCue > 30s OR firstCue increasing across segments
+  const isBroadcastAbsolute =
+    (firstCueMs > 30000 &&
+      firstCueMs > videoDurationMs * 2 &&
+      videoDurationMs > 0) ||
+    isIncreasingTimestamps;
+  const isShortVideo = videoDurationMs > 0 && videoDurationMs < 60000;
+
+  if (
+    !isLiveTV &&
+    streamType === undefined &&
+    isShortVideo &&
+    isBroadcastAbsolute
+  ) {
+    isLiveTV = true;
+    console.log(
+      `[FFProfanity] Detected Live TV: short video (${videoDurationMs}ms) with broadcast timestamps (${firstCueMs}ms)${isIncreasingTimestamps ? " [increasing pattern]" : ""}`,
+    );
+  }
+
+  if (isLiveTV && rawResult.timestampMap) {
+    // Live TV: Check if timestamps are broadcast-absolute (firstCue >> videoDuration)
+    if (isBroadcastAbsolute) {
+      // Broadcast-absolute timestamps: firstCue is time into original program (e.g., 6:09 = 369517ms)
+      // For Live TV, video position represents current playback in the circular buffer
+      // Map subtitles to current playback position: offset = videoPos - firstCue
+      const videoPosMs = videoElement
+        ? Math.round(videoElement.currentTime * 1000)
+        : 0;
+      const offset = videoPosMs - firstCueMs;
+      finalCues = rawResult.cues.map((cue) => ({
+        ...cue,
+        startMs: cue.startMs + offset,
+        endMs: cue.endMs + offset,
+      }));
+      console.log(
+        `[FFProfanity] Live TV: Broadcast-absolute offset=${offset}ms. ` +
+          `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms, ` +
+          `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
+      );
+    } else {
+      // Segment-relative timestamps: VTT starts at 0-10s within the segment
+      // Use mtp (media time position) from URL to align with video timeline
+      const mtpMs = segmentLoadTimeMs || 0;
+      if (mtpMs > 0) {
+        // mtp indicates where this segment should start in the video
+        finalCues = rawResult.cues.map((cue) => ({
+          ...cue,
+          startMs: cue.startMs + mtpMs,
+          endMs: cue.endMs + mtpMs,
+        }));
+        console.log(
+          `[FFProfanity] Live TV: Segment-relative + mtp offset. ` +
+            `mtp=${mtpMs}ms, firstCue=${firstCueMs}ms. ` +
+            `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
+        );
+      } else {
+        // No mtp available - fall back to video position
+        const videoPosMs = videoElement
+          ? Math.round(videoElement.currentTime * 1000)
+          : 0;
+        // Only apply offset if timestamps would make sense relative to video position
+        // This handles cases where segments arrive ahead of playback
+        if (firstCueMs > videoPosMs + 5000) {
+          // Timestamps are ahead of video - wait for video to catch up
+          console.log(
+            `[FFProfanity] Live TV: Segment timestamps ahead of video. ` +
+              `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms - no offset applied`,
+          );
+        } else {
+          console.log(
+            `[FFProfanity] Live TV: Segment timestamps already aligned. ` +
+              `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms`,
+          );
+        }
+      }
+    }
+  } else {
+    // VOD: Timestamps are already in movie timeline, use directly
+    // mtp is NOT a timeline offset - it's the HLS playlist position
+    if (rawResult.timestampMap) {
+      console.log(
+        `[FFProfanity] VOD: Using movie timeline timestamps directly (no offset). ` +
+          `firstCue=${firstCueMs}ms, mtp=${segmentLoadTimeMs}ms (ignored)}`,
+      );
+    }
+  }
   console.log(
-    `[FFProfanity] Parsed ${result.cues.length} cues from ${source} (${language})`,
+    `[FFProfanity] Parsed ${finalCues.length} cues from ${source} (${language})`,
   );
 
-  // Store as a virtual track
   const trackId = `content-${Date.now()}`;
 
-  // Process the cues directly
-  processCues(result.cues);
+  processCues(finalCues);
 
-  // Update status
   currentTrack = {
     id: trackId,
     url: "",
-    label: label || language || "YouTube",
+    label: label || language || "Detected",
     language: language || "en",
     isSDH: false,
     isDefault: true,
     embedded: false,
     source: source as "video" | "network" | "user",
-    recommendScore: 10, // High score since we already have content
+    recommendScore: 10,
   };
 
   detectedTracks = [currentTrack];
 
   console.log(
-    `[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${result.cues.length} cues)`,
+    `[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${finalCues.length} cues)`,
   );
 }
 
@@ -786,6 +914,9 @@ function attachVideoListeners(video: HTMLVideoElement): void {
  */
 function handleVideoSeeked(): void {
   if (!videoElement || !isActive || cues.length === 0) return;
+
+  // Clear cues on seek since timing will be recalculated on next segment
+  cues = [];
 
   const currentTimeMs = videoElement.currentTime * 1000;
   const profanityCue = cueIndex.findProfanityCue(
@@ -1249,6 +1380,9 @@ async function handleSubtitleUpload(
     return;
   }
 
+  // For uploaded subtitle files, use cues as-is (VOD/static content)
+  // Live TV timing offsets are only applied in handleSubtitleContent()
+  // for intercepted PlutoTV segments which have context (streamType, segmentLoadTimeMs)
   processCues(result.cues);
   // Note: cues are NOT saved to storage - per-session only
 
@@ -1277,16 +1411,17 @@ async function handleSubtitleUpload(
 
 /**
  * Process cues with profanity detection
+ * For HLS streams, accumulate cues from multiple segments instead of replacing
  */
 function processCues(newCues: Cue[]): void {
   console.log(
-    `[FFProfanity] Processing ${newCues.length} cues, useSubstitutions: ${settings.useSubstitutions}, category: ${settings.substitutionCategory}`,
+    `[FFProfanity] Processing ${newCues.length} new cues, existing: ${cues.length}`,
   );
 
-  cues = newCues.map((cue) => {
+  // Process new cues for profanity
+  const processedNewCues = newCues.map((cue) => {
     const detection = detector.detect(cue.text);
 
-    // Debug: log any cue containing "bullshit"
     if (cue.text.toLowerCase().includes("bullshit")) {
       console.log(`[FFProfanity] DEBUG bullshit cue ${cue.id}:`, {
         text: cue.text,
@@ -1305,7 +1440,6 @@ function processCues(newCues: Cue[]): void {
       profanityMatches: detection.matches,
     };
 
-    // Compute profanity windows for medium/low sensitivity modes
     if (detection.hasProfanity && settings.sensitivity !== "high") {
       processedCue.profanityWindows = computeProfanityWindows(
         cue.id,
@@ -1319,6 +1453,24 @@ function processCues(newCues: Cue[]): void {
 
     return processedCue;
   });
+
+  // Accumulate cues: merge new cues with existing, avoiding duplicates
+  // Use startMs + text as unique key to prevent duplicates from overlapping segments
+  const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+  const uniqueNewCues = processedNewCues.filter(
+    (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+  );
+
+  cues = [...cues, ...uniqueNewCues];
+
+  // Sort by start time
+  cues.sort((a, b) => a.startMs - b.startMs);
+
+  // Limit total cues to prevent memory issues (keep last 5 minutes = 300000ms)
+  const maxCues = 500;
+  if (cues.length > maxCues) {
+    cues = cues.slice(-maxCues);
+  }
 
   // Build index for fast lookup
   cueIndex.build(cues);

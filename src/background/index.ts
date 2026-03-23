@@ -416,3 +416,105 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 browser.runtime.onInstalled.addListener((details) => {
   console.log("Profanity Filter installed:", details.reason);
 });
+
+/**
+ * Inject page scripts into tabs via scripting.executeScript with world: 'MAIN'
+ * This bypasses CSP restrictions on sites like PlutoTV
+ * Uses onCommitted for early injection (before page scripts run)
+ */
+const injectedTabs = new Set<number>();
+
+// Add CORS headers for subtitle requests so content script can fetch them
+browser.declarativeNetRequest
+  .updateDynamicRules({
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: {
+          type: "modifyHeaders" as const,
+          responseHeaders: [
+            {
+              header: "Access-Control-Allow-Origin",
+              operation: "set" as const,
+              value: "*",
+            },
+            {
+              header: "Access-Control-Allow-Methods",
+              operation: "set" as const,
+              value: "GET, HEAD, OPTIONS",
+            },
+            {
+              header: "Access-Control-Allow-Credentials",
+              operation: "set" as const,
+              value: "true",
+            },
+          ],
+        },
+        condition: {
+          urlFilter: "*://*/*.vtt*",
+          resourceTypes: ["xmlhttprequest", "other", "media"],
+        },
+      },
+      {
+        id: 2,
+        priority: 1,
+        action: {
+          type: "modifyHeaders" as const,
+          responseHeaders: [
+            {
+              header: "Access-Control-Allow-Origin",
+              operation: "set" as const,
+              value: "*",
+            },
+          ],
+        },
+        condition: {
+          urlFilter: "*://*/*.vtt*",
+          resourceTypes: ["main_frame", "sub_frame"],
+        },
+      },
+    ],
+  })
+  .catch((err) => {
+    // Rules may already exist, ignore error
+    if (!err.message?.includes("Duplicate rule id")) {
+      console.warn("[FFProfanity] declarativeNetRequest setup:", err);
+    }
+  });
+
+async function injectPageScriptForUrl(
+  tabId: number,
+  url: string,
+): Promise<boolean> {
+  if (/pluto\.tv|plutotv\.com/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/plutotv-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      console.log(`[FFProfanity] Injected PlutoTV script into tab ${tabId}`);
+      return true;
+    } catch (error) {
+      console.error(`[FFProfanity] Failed to inject script:`, error);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
+  return false;
+}
+
+browser.webNavigation.onCommitted.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  injectedTabs.delete(details.tabId);
+  await injectPageScriptForUrl(details.tabId, details.url);
+});
+
+browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab.url) {
+    await injectPageScriptForUrl(tabId, tab.url);
+  }
+});

@@ -6,8 +6,9 @@
 import type { SubtitleTrack, NetworkSubtitle } from "../types";
 import { createTrackFromElement, createTrackFromNetwork } from "./tracks";
 
-// File extensions that indicate subtitle files
 const SUBTITLE_EXTENSIONS = [".vtt", ".srt", ".ass", ".ssa", ".sub"];
+const FONT_EXTENSIONS = [".otf", ".ttf", ".woff", ".woff2", ".eot"];
+
 const SUBTITLE_MIME_TYPES = [
   "text/vtt",
   "text/srt",
@@ -16,21 +17,15 @@ const SUBTITLE_MIME_TYPES = [
   "text/x-ass",
 ];
 
-// URL patterns for known streaming sites
 const STREAMING_PATTERNS = [
-  // Generic patterns
   /\/subtitles?\//i,
   /\/subs?\//i,
-  /\/caption/i,
   /\/cc\//i,
   /\.vtt$/i,
   /\.srt$/i,
   /\.ass$/i,
   /\.ssa$/i,
-
-  // Streaming site specific
   /manifest=.*\.vtt/i,
-  /subtitle.*\.m3u8/i,
 ];
 
 /**
@@ -41,18 +36,23 @@ export function isSubtitleUrl(url: string): boolean {
     const urlObj = new URL(url);
     const path = urlObj.pathname.toLowerCase();
 
-    // Check extension
+    if (FONT_EXTENSIONS.some((ext) => path.endsWith(ext))) {
+      return false;
+    }
+
+    if (path.endsWith(".m3u8")) {
+      return false;
+    }
+
     if (SUBTITLE_EXTENSIONS.some((ext) => path.endsWith(ext))) {
       return true;
     }
 
-    // Check for subtitle query parameters
     const query = urlObj.searchParams;
     if (query.has("subtitle") || query.has("subs") || query.has("captions")) {
       return true;
     }
 
-    // Check against known patterns
     if (STREAMING_PATTERNS.some((pattern) => pattern.test(url))) {
       return true;
     }

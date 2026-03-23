@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profanity Filter</title>
+  <link rel="stylesheet" href="styles/popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>Profanity Filter</h1>
+    <span class="icon">🔇</span>
+  </div>
+
+  <div class="status-section">
+    <div class="status-indicator status-inactive" id="statusIndicator"></div>
+    <div class="status-text" id="statusText">Checking...</div>
+  </div>
+
+  <div class="current-cue hidden" id="currentCue">
+    <div class="current-cue-label">Current Cue</div>
+    <div class="current-cue-text" id="cueText"></div>
+  </div>
+
+  <div class="next-cues" id="nextCues">
+    <div class="next-cues-label">Upcoming</div>
+    <div id="nextList"></div>
+  </div>
+
+  <div class="offset-controls" id="offsetControls">
+    <div class="offset-label">Timing Offset</div>
+    <div class="offset-slider">
+      <input type="range" id="offsetSlider" min="-10000" max="10000" step="100" value="0">
+      <span class="offset-value" id="offsetValue">0ms</span>
+    </div>
+    <div class="offset-buttons">
+      <button id="offsetBack" class="secondary" style="flex: 0; width: 40px;">◀ -500ms</button>
+      <button id="offsetForward" class="secondary" style="flex: 0; width: 40px;">+500ms ▶</button>
+    </div>
+  </div>
+
+  <div class="button-group">
+    <button id="toggle" class="primary" disabled>Enable</button>
+    <button id="options" class="secondary">Options</button>
+  </div>
+
+  <div class="footer">
+    <a href="options.html">Settings</a> • <a href="privacy.html">Privacy</a>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

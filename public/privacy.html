@@ -1,0 +1,166 @@
+# Privacy Policy
+
+## Profanity Filter WebExtension
+
+### Effective Date: Upon Installation
+
+This privacy policy describes how the **Profanity Filter** browser extension handles your data.
+
+---
+
+## Privacy-First Commitment
+
+**Your privacy is our primary concern.** This extension is designed with the following core principles:
+
+### Local Processing Only
+- **All subtitle parsing and profanity detection happens locally in your browser**
+- **No data is uploaded to any external servers**
+- **No external network calls are made by default**
+- **The extension works completely offline after installation**
+
+### No Telemetry
+- We do not collect any usage statistics
+- We do not track how you use the extension
+- We do not send any analytics data
+- No data leaves your browser
+
+---
+
+## Data Storage
+
+### What We Store Locally
+The extension uses browser storage (extension local storage) to save:
+
+1. **Settings**: Your preferences (offset, sensitivity, custom wordlist)
+2. **Subtitles**: Cues from uploaded subtitle files
+3. **Per-site presets**: Custom settings for specific websites
+
+### Where Data Is Stored
+- All data is stored in `browser.storage.local` within your browser's profile directory
+- This data never leaves your local machine
+- You can clear this data at any time by:
+
+1. Opening the extension options
+2. Clicking "Reset All" to clear all stored data
+3. Or using your browser's extension management to remove the extension
+
+---
+
+## Optional Features
+
+### Features Requiring Opt-In
+Some features may require explicit user consent in the future:
+
+- **Auto-fetch subtitles**: If you choose to use this feature, your browser would contact OpenSubtitles or similar services. This is **disabled by default** and requires explicit opt-in.
+
+- **Contextual analysis**: Advanced AI-based profanity detection would use TensorFlow.js running entirely in your browser. No data is sent externally.
+
+When these features are implemented, additional privacy notices will be provided at the time of opt-in.
+
+---
+
+## Third-Party Access
+
+### No Third-Party Access
+- No third-party services are used for core functionality
+- No cookies or tracking technologies are used
+- No advertising integrations are present
+- No user accounts or authentication required
+
+---
+
+## Browser Permissions
+
+The extension requests the following permissions:
+
+| Permission | Purpose |
+|------------|---------|
+| `tabs` | To mute/unmute the current tab during profanity segments |
+| `storage` | To save your settings and uploaded subtitles locally |
+| `activeTab` | To detect video elements and display subtitle overlays |
+
+### Host Permissions
+- Content scripts run on all pages (`<all_urls>`) to detect video elements
+- No page content is transmitted externally
+- Content is only analyzed locally for profanity detection
+
+---
+
+## Security
+
+### Content Security
+- All subtitle text is sanitized before DOM insertion to prevent XSS attacks
+- No `eval()` or dynamic code execution
+- No external script loading
+
+### Limitations
+- The extension does **not** inject into:
+  - `about:` pages
+  - Browser internal pages
+  - Extension gallery pages
+
+---
+
+## Your Rights
+
+### Data Access
+You can view all stored data by:
+1. Opening browser developer tools
+2. navigating to `about:addons`
+3. Finding Profanity Filter in the Extensions section
+4. Using the Storage Inspector
+
+### Data Deletion
+- **Partial**: Remove specific subtitle files or clear settings via the Options page
+- **Complete**: Uninstall the extension to remove all associated data
+
+### Data Export
+Use the "Export Settings" button in Options to download your configuration as a JSON file.
+
+---
+
+## Children's Privacy
+
+This extension is designed for general audiences and may help families manage content. However:
+- We do not knowingly collect any information
+- Parents should review subtitle files before uploading
+- The wordlist can be customized for family-friendly use
+
+---
+
+## Changes to This Policy
+
+If this privacy policy changes:
+- A notification will be shown when the extension updates
+- The "Effective Date" will be updated
+- Continued use constitutes acceptance of changes
+
+---
+
+## Open Source
+
+This extension is open source:
+- Repository: https://github.com/ffprofanity/ffprofanity
+- License: MIT License
+- Code is available for review
+
+---
+
+## Contact
+
+For privacy questions or concerns:
+- Open an issue on GitHub: https://github.com/ffprofanity/ffprofanity/issues
+- This extension has no external support channels
+
+---
+
+## Summary
+
+✅ **All processing is local**  
+✅ **No data is sent externally**  
+✅ **No tracking or analytics**  
+✅ **No accounts required**  
+✅ **Settings are stored only in your browser**  
+✅ **You can delete all data at any time**  
+
+Your privacy is protected by design.

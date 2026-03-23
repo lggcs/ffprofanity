@@ -11,24 +11,22 @@ rm -rf dist
 mkdir -p dist/icons
 mkdir -p dist/styles
 
-# Install esbuild if not present
-if ! command -v npx &> /dev/null; then
-    echo "npx is required"
-    exit 1
-fi
-
 # Bundle TypeScript files with esbuild
 echo "Bundling background script..."
-npx esbuild src/background/index.ts --bundle --outfile=dist/background.js --format=esm --platform=browser --target=firefox102 --external:firefo-webext-browser
+npm exec -- esbuild src/background/index.ts --bundle --outfile=dist/background.js --format=esm --platform=browser --target=firefox102 --external:firefo-webext-browser
 
 echo "Bundling content script..."
-npx esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox102
+npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox102
 
 echo "Bundling options script..."
-npx esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox102
+npm exec -- esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox102
 
 echo "Bundling popup script..."
-npx esbuild src/popup/index.ts --bundle --outfile=dist/popup.js --format=iife --platform=browser --target=firefox102
+npm exec -- esbuild src/popup/index.ts --bundle --outfile=dist/popup.js --format=iife --platform=browser --target=firefox102
+
+echo "Bundling page-scripts..."
+mkdir -p dist/page-scripts
+npm exec -- esbuild src/page-scripts/plutotv-injected.ts --bundle --outfile=dist/page-scripts/plutotv-injected.js --format=iife --platform=browser --target=firefox102
 
 # Copy static files
 echo "Copying static files..."
