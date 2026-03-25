@@ -468,122 +468,142 @@ function handleSubtitleContent(
 
   let finalCues = rawResult.cues;
 
-  // TIMING ANALYSIS:
-  // - VTT timestamps are already in the content's native timeline (movie for VOD, broadcast for live)
-  // - The mtp parameter indicates HLS playlist position, NOT a timeline offset to add
-  // - For Live TV with short segments + broadcast-absolute timestamps: convert to segment-relative
-  // - For VOD: timestamps are already correct in movie timeline, no offset needed
-
-  // Detect Live TV from streamType OR from video characteristics
-  // Live TV segments are short (~30s) with broadcast-absolute timestamps (>> video duration)
-  let isLiveTV = streamType === "live";
-  const firstCueMs = rawResult.cues[0]?.startMs || 0;
-  const videoDurationMs = videoElement ? videoElement.duration * 1000 : 0;
-
-  // Detect broadcast-absolute timestamps by tracking firstCue across segments
-  // Broadcast-absolute: firstCue INCREASES across segments (6s → 11s → 14s → 18s...)
-  // Segment-relative: firstCue RESETS to ~0 each segment (0s → 0s → 0s...)
-  const isIncreasingTimestamps =
-    previousFirstCueMs !== null && firstCueMs > previousFirstCueMs;
-  previousFirstCueMs = firstCueMs;
-
-  // Fallback: Detect Live TV when streamType is missing but video characteristics indicate live TV
-  // Live TV: short video segments (< 60s) with broadcast-absolute timestamps (>> video duration)
-  // VOD: longer video (> 60s) with movie timeline timestamps
-  // Broadcast-absolute detection: firstCue > 30s OR firstCue increasing across segments
-  const isBroadcastAbsolute =
-    (firstCueMs > 30000 &&
-      firstCueMs > videoDurationMs * 2 &&
-      videoDurationMs > 0) ||
-    isIncreasingTimestamps;
-  const isShortVideo = videoDurationMs > 0 && videoDurationMs < 60000;
-
-  if (
-    !isLiveTV &&
-    streamType === undefined &&
-    isShortVideo &&
-    isBroadcastAbsolute
-  ) {
-    isLiveTV = true;
+  // FMovies/subs from video.textTracks are already perfectly synced with the player
+  // Skip any timing adjustments for these sources
+  const isSyncedSource = source === "fmovies" || source === "Wyzie" || source === "Video Track" || label === "Video Track";
+  
+  if (isSyncedSource) {
+    // Trust the timestamps as-is - they're already in the video's timeline
     console.log(
-      `[FFProfanity] Detected Live TV: short video (${videoDurationMs}ms) with broadcast timestamps (${firstCueMs}ms)${isIncreasingTimestamps ? " [increasing pattern]" : ""}`,
+      `[FFProfanity] Using synced source '${source}': ${finalCues.length} cues, ` +
+      `range: ${finalCues[0]?.startMs}ms - ${finalCues[finalCues.length-1]?.endMs}ms`
     );
-  }
+    // Reset previousFirstCueMs to prevent cross-source contamination
+    previousFirstCueMs = null;
+  } else {
+    // TIMING ANALYSIS for streaming sources (PlutoTV, etc.):
+    // - VTT timestamps are already in the content's native timeline (movie for VOD, broadcast for live)
+    // - The mtp parameter indicates HLS playlist position, NOT a timeline offset to add
+    // - For Live TV with short segments + broadcast-absolute timestamps: convert to segment-relative
+    // - For VOD: timestamps are already correct in movie timeline, no offset needed
 
-  if (isLiveTV && rawResult.timestampMap) {
-    // Live TV: Check if timestamps are broadcast-absolute (firstCue >> videoDuration)
-    if (isBroadcastAbsolute) {
-      // Broadcast-absolute timestamps: firstCue is time into original program (e.g., 6:09 = 369517ms)
-      // For Live TV, video position represents current playback in the circular buffer
-      // Map subtitles to current playback position: offset = videoPos - firstCue
-      const videoPosMs = videoElement
-        ? Math.round(videoElement.currentTime * 1000)
-        : 0;
-      const offset = videoPosMs - firstCueMs;
-      finalCues = rawResult.cues.map((cue) => ({
-        ...cue,
-        startMs: cue.startMs + offset,
-        endMs: cue.endMs + offset,
-      }));
+    // Detect Live TV from streamType OR from video characteristics
+    // Live TV segments are short (~30s) with broadcast-absolute timestamps (>> video duration)
+    let isLiveTV = streamType === "live";
+    const firstCueMs = rawResult.cues[0]?.startMs || 0;
+    const videoDurationMs = videoElement ? videoElement.duration * 1000 : 0;
+
+    // Detect broadcast-absolute timestamps by tracking firstCue across segments
+    // Broadcast-absolute: firstCue INCREASES across segments (6s → 11s → 14s → 18s...)
+    // Segment-relative: firstCue RESETS to ~0 each segment (0s → 0s → 0s...)
+    const isIncreasingTimestamps =
+      previousFirstCueMs !== null && firstCueMs > previousFirstCueMs;
+    previousFirstCueMs = firstCueMs;
+
+    // Fallback: Detect Live TV when streamType is missing but video characteristics indicate live TV
+    // Live TV: short video segments (< 60s) with broadcast-absolute timestamps (>> video duration)
+    // VOD: longer video (> 60s) with movie timeline timestamps
+    // Broadcast-absolute detection: firstCue > 30s OR firstCue increasing across segments
+    const isBroadcastAbsolute =
+      (firstCueMs > 30000 &&
+        firstCueMs > videoDurationMs * 2 &&
+        videoDurationMs > 0) ||
+      isIncreasingTimestamps;
+    const isShortVideo = videoDurationMs > 0 && videoDurationMs < 60000;
+
+    if (
+      !isLiveTV &&
+      streamType === undefined &&
+      isShortVideo &&
+      isBroadcastAbsolute
+    ) {
+      isLiveTV = true;
       console.log(
-        `[FFProfanity] Live TV: Broadcast-absolute offset=${offset}ms. ` +
-          `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms, ` +
-          `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
+        `[FFProfanity] Detected Live TV: short video (${videoDurationMs}ms) with broadcast timestamps (${firstCueMs}ms)${isIncreasingTimestamps ? " [increasing pattern]" : ""}`,
       );
-    } else {
-      // Segment-relative timestamps: VTT starts at 0-10s within the segment
-      // Use mtp (media time position) from URL to align with video timeline
-      const mtpMs = segmentLoadTimeMs || 0;
-      if (mtpMs > 0) {
-        // mtp indicates where this segment should start in the video
-        finalCues = rawResult.cues.map((cue) => ({
-          ...cue,
-          startMs: cue.startMs + mtpMs,
-          endMs: cue.endMs + mtpMs,
-        }));
-        console.log(
-          `[FFProfanity] Live TV: Segment-relative + mtp offset. ` +
-            `mtp=${mtpMs}ms, firstCue=${firstCueMs}ms. ` +
-            `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
-        );
-      } else {
-        // No mtp available - fall back to video position
+    }
+
+    if (isLiveTV && rawResult.timestampMap) {
+      // Live TV: Check if timestamps are broadcast-absolute (firstCue >> videoDuration)
+      if (isBroadcastAbsolute) {
+        // Broadcast-absolute timestamps: firstCue is time into original program (e.g., 6:09 = 369517ms)
+        // For Live TV, video position represents current playback in the circular buffer
+        // Map subtitles to current playback position: offset = videoPos - firstCue
         const videoPosMs = videoElement
           ? Math.round(videoElement.currentTime * 1000)
           : 0;
-        // Only apply offset if timestamps would make sense relative to video position
-        // This handles cases where segments arrive ahead of playback
-        if (firstCueMs > videoPosMs + 5000) {
-          // Timestamps are ahead of video - wait for video to catch up
+        const offset = videoPosMs - firstCueMs;
+        finalCues = rawResult.cues.map((cue) => ({
+          ...cue,
+          startMs: cue.startMs + offset,
+          endMs: cue.endMs + offset,
+        }));
+        console.log(
+          `[FFProfanity] Live TV: Broadcast-absolute offset=${offset}ms. ` +
+            `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms, ` +
+            `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
+        );
+      } else {
+        // Segment-relative timestamps: VTT starts at 0-10s within the segment
+        // Use mtp (media time position) from URL to align with video timeline
+        const mtpMs = segmentLoadTimeMs || 0;
+        if (mtpMs > 0) {
+          // mtp indicates where this segment should start in the video
+          finalCues = rawResult.cues.map((cue) => ({
+            ...cue,
+            startMs: cue.startMs + mtpMs,
+            endMs: cue.endMs + mtpMs,
+          }));
           console.log(
-            `[FFProfanity] Live TV: Segment timestamps ahead of video. ` +
-              `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms - no offset applied`,
+            `[FFProfanity] Live TV: Segment-relative + mtp offset. ` +
+              `mtp=${mtpMs}ms, firstCue=${firstCueMs}ms. ` +
+              `Cue range: ${finalCues[0]?.startMs}ms -> ${finalCues[finalCues.length - 1]?.endMs}ms`,
           );
         } else {
-          console.log(
-            `[FFProfanity] Live TV: Segment timestamps already aligned. ` +
-              `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms`,
-          );
+          // No mtp available - fall back to video position
+          const videoPosMs = videoElement
+            ? Math.round(videoElement.currentTime * 1000)
+            : 0;
+          // Only apply offset if timestamps would make sense relative to video position
+          // This handles cases where segments arrive ahead of playback
+          if (firstCueMs > videoPosMs + 5000) {
+            // Timestamps are ahead of video - wait for video to catch up
+            console.log(
+              `[FFProfanity] Live TV: Segment timestamps ahead of video. ` +
+                `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms - no offset applied`,
+            );
+          } else {
+            console.log(
+              `[FFProfanity] Live TV: Segment timestamps already aligned. ` +
+                `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms`,
+            );
+          }
         }
       }
+    } else {
+      // VOD: Timestamps are already in movie timeline, use directly
+      // mtp is NOT a timeline offset - it's the HLS playlist position
+      if (rawResult.timestampMap) {
+        console.log(
+          `[FFProfanity] VOD: Using movie timeline timestamps directly (no offset). ` +
+            `firstCue=${firstCueMs}ms, mtp=${segmentLoadTimeMs}ms (ignored)}`,
+        );
+      }
     }
-  } else {
-    // VOD: Timestamps are already in movie timeline, use directly
-    // mtp is NOT a timeline offset - it's the HLS playlist position
-    if (rawResult.timestampMap) {
-      console.log(
-        `[FFProfanity] VOD: Using movie timeline timestamps directly (no offset). ` +
-          `firstCue=${firstCueMs}ms, mtp=${segmentLoadTimeMs}ms (ignored)}`,
-      );
-    }
-  }
+  } // end else (not syncedSource)
   console.log(
     `[FFProfanity] Parsed ${finalCues.length} cues from ${source} (${language})`,
   );
 
   const trackId = `content-${Date.now()}`;
 
-  processCues(finalCues);
+  // Tag cues with source for deduplication logic
+  const taggedCues = finalCues.map(cue => ({
+    ...cue,
+    source: source
+  }));
+
+  processCues(taggedCues);
 
   currentTrack = {
     id: trackId,
@@ -1479,14 +1499,47 @@ function processCues(newCues: Cue[]): void {
     return processedCue;
   });
 
-  // Accumulate cues: merge new cues with existing, avoiding duplicates
-  // Use startMs + text as unique key to prevent duplicates from overlapping segments
-  const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
-  const uniqueNewCues = processedNewCues.filter(
-    (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
-  );
-
-  cues = [...cues, ...uniqueNewCues];
+  // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
+  // If new cues have similar timing range to existing, replace instead of accumulate
+  const firstCueSource = newCues[0]?.source || '';
+  const isSyncedSource = firstCueSource === 'fmovies' || 
+                         firstCueSource === 'wyzie';
+  
+  if (isSyncedSource && cues.length > 0 && processedNewCues.length > 100) {
+    // Check timing overlap: if ranges overlap significantly, this is likely a replacement
+    const existingStart = cues[0]?.startMs || 0;
+    const existingEnd = cues[cues.length - 1]?.endMs || 0;
+    const newStart = processedNewCues[0]?.startMs || 0;
+    const newEnd = processedNewCues[processedNewCues.length - 1]?.endMs || 0;
+    
+    // If timing ranges overlap by >50%, replace instead of accumulate
+    const overlapStart = Math.max(existingStart, newStart);
+    const overlapEnd = Math.min(existingEnd, newEnd);
+    const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+    const existingDuration = existingEnd - existingStart;
+    
+    if (existingDuration > 0 && overlapDuration > existingDuration * 0.5) {
+      console.log(
+        `[FFProfanity] Replacing ${cues.length} cues with ${processedNewCues.length} (timing overlap detected)`
+      );
+      cues = processedNewCues;
+    } else {
+      // No significant overlap - accumulate with deduplication
+      const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+      const uniqueNewCues = processedNewCues.filter(
+        (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+      );
+      cues = [...cues, ...uniqueNewCues];
+    }
+  } else {
+    // Accumulate cues: merge new cues with existing, avoiding duplicates
+    // Use startMs + text as unique key to prevent duplicates from overlapping segments
+    const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+    const uniqueNewCues = processedNewCues.filter(
+      (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+    );
+    cues = [...cues, ...uniqueNewCues];
+  }
 
   // Sort by start time
   cues.sort((a, b) => a.startMs - b.startMs);
