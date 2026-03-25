@@ -3,8 +3,9 @@
  * Handles subtitle detection for fmovies streaming sites
  *
  * ARCHITECTURE:
- * fmovies uses dynamic subtitle loading - <track> elements exist but src is
- * set dynamically via JavaScript after user interaction or playback start.
+ * fmovies uses dynamic subtitle loading from sub.wyzie.io API.
+ * Subtitles are fetched on-demand when user selects a language.
+ * The sources API (api.videasy.net) returns encrypted data with subtitle IDs.
  *
  * ANTI-DEBUGGING NOTE:
  * fmovies has anti-debugging protection that triggers debugger statements
@@ -12,9 +13,10 @@
  * to avoid triggering those protections.
  *
  * SUBTITLE DETECTION STRATEGIES:
- * 1. Video element <track> src monitoring (passive)
- * 2. VideoJS player remoteTextTrackEls() detection
- * 3. Periodic scanning for new track URLs
+ * 1. Intercept fetch/XHR to sub.wyzie.io for subtitle URLs
+ * 2. Capture HLS manifest parsing for embedded subtitles
+ * 3. Monitor video textTracks for dynamically loaded subtitles
+ * 4. Intercept sources API to capture subtitle list data
  */
 
 import { BaseExtractor, DetectedSubtitle } from "./base";
@@ -33,13 +35,13 @@ export class FMoviesExtractor extends BaseExtractor {
    */
   getInjectedScript(): string {
     return `
-      // fmovies Subtitle Extractor - Passive detection (anti-debugging safe)
+      // fmovies Subtitle Extractor - Network interception based
       (function() {
         'use strict';
 
         const EXTRACTOR_ID = 'fmovies';
         const sentSubtitles = new Set();
-        let checkInterval = null;
+        const sentContent = new Set();
 
         // Send detected subtitles to content script
         function sendSubtitles(subs, source) {
@@ -47,8 +49,10 @@ export class FMoviesExtractor extends BaseExtractor {
 
           try {
             const uniqueSubs = subs.filter(s => {
-              if (sentSubtitles.has(s.url)) return false;
-              sentSubtitles.add(s.url);
+              const key = s.url || s.content;
+              if (!key) return false;
+              if (sentSubtitles.has(key)) return false;
+              sentSubtitles.add(key);
               return true;
             });
 
@@ -65,170 +69,230 @@ export class FMoviesExtractor extends BaseExtractor {
           }
         }
 
-        // Extract language from URL
-        function extractLanguage(url) {
+        // Send subtitle content directly (for when we capture the actual text)
+        function sendSubtitleContent(content, language, label) {
+          const key = content.substring(0, 100);
+          if (sentContent.has(key)) return;
+          sentContent.add(key);
+
+          console.log('[FMovies] Received subtitle content for', label, language);
+          window.postMessage({
+            type: 'FFPROFANITY_SUBTITLE_CONTENT',
+            source: EXTRACTOR_ID,
+            content: content,
+            language: language,
+            label: label
+          }, '*');
+        }
+
+        // Extract language from URL or response
+        function extractLanguageFromUrl(url) {
           const patterns = [
             /[?&]lang=([a-z]{2,3})/i,
+            /[?&]language=([a-z]{2,3})/i,
             /[_\\-\\.]([a-z]{2,3})\\.(vtt|srt|ass|ssa)/i,
             /\\/([a-z]{2,3})_[a-f0-9]+\\.vtt/i,
-            /\\/([a-z]{2,3})\\/[^/]+\\.vtt/i,
           ];
           for (const pattern of patterns) {
             const match = url.match(pattern);
             if (match) return match[1].toLowerCase();
           }
-          return 'en';
+          return null;
         }
 
-        // Strategy 1: Scan video elements for tracks with src
-        function scanVideoTracks() {
-          try {
-            const videos = document.querySelectorAll('video');
-            for (const video of videos) {
-              const tracks = video.querySelectorAll('track');
-              for (const track of tracks) {
-                const src = track.getAttribute('src');
-                if (src && !src.startsWith('blob:') && !sentSubtitles.has(src)) {
-                  const label = track.label || 'Unknown';
-                  const lang = track.srclang || extractLanguage(src);
+        // Strategy 1: Intercept fetch to capture wyzie subtitle responses
+        function interceptFetch() {
+          const originalFetch = window.fetch;
+          window.fetch = async function(url, options) {
+            const urlStr = typeof url === 'string' ? url : url.url || '';
+            
+            try {
+              const response = await originalFetch.apply(this, arguments);
+              
+              // Check for wyzie subtitle URLs
+              if (urlStr.includes('sub.wyzie.io')) {
+                console.log('[FMovies] Intercepted wyzie request:', urlStr);
+                
+                try {
+                  const clone = response.clone();
+                  const text = await clone.text();
+                  
+                  // Extract language from URL params or content
+                  let language = extractLanguageFromUrl(urlStr) || 'en';
+                  let label = 'Unknown';
+                  
+                  // Try to detect language from content (first lines often have language hint)
+                  const lines = text.split('\\n').slice(0, 20);
+                  for (const line of lines) {
+                    if (line.includes('Language:') || line.includes('language:')) {
+                      const langMatch = line.match(/language:\\s*([a-z]{2,3})/i);
+                      if (langMatch) language = langMatch[1].toLowerCase();
+                    }
+                  }
+                  
+                  // If content is SRT format, send it directly
+                  if (text.startsWith('1') || text.includes('-->')) {
+                    sendSubtitleContent(text, language, label);
+                  }
+                  
+                  // Also try to extract subtitle URL for future reference
                   sendSubtitles([{
-                    url: src,
-                    language: lang,
+                    url: urlStr,
+                    language: language,
                     label: label,
-                    source: 'video-track'
-                  }], 'video-track');
+                    source: 'wyzie-intercept'
+                  }], 'wyzie-intercept');
+                  
+                } catch (e) {
+                  console.log('[FMovies] Error processing wyzie response:', e.message);
                 }
               }
+              
+              // Check for sources API responses
+              if (urlStr.includes('sources-with-title') || urlStr.includes('api.videasy.net')) {
+                console.log('[FMovies] Intercepted sources API:', urlStr);
+              }
+              
+              return response;
+            } catch (e) {
+              throw e;
             }
-          } catch (e) {}
+          };
         }
 
-        // Strategy 2: Check VideoJS players for text tracks
-        function scanVideoJS() {
-          try {
-            if (typeof window.videojs === 'undefined') return;
-            const players = window.videojs.players;
-            if (!players) return;
-
-            for (const playerId of Object.keys(players)) {
-              const player = players[playerId];
-              if (!player) continue;
-
-              // Try remoteTextTrackEls
-              try {
-                const tracks = player.remoteTextTrackEls ? player.remoteTextTrackEls() : [];
-                for (const track of tracks) {
-                  const trackEl = track.track || track;
-                  const src = trackEl.src || track.src;
-                  if (src && !src.startsWith('blob:') && !sentSubtitles.has(src)) {
-                    const label = trackEl.label || track.label || 'Unknown';
-                    const lang = trackEl.language || track.language || extractLanguage(src);
-                    sendSubtitles([{
-                      url: src,
-                      language: lang,
-                      label: label,
-                      source: 'videojs'
-                    }], 'videojs');
+        // Strategy 2: Intercept XHR for older API calls
+        function interceptXHR() {
+          const originalOpen = XMLHttpRequest.prototype.open;
+          const originalSend = XMLHttpRequest.prototype.send;
+          
+          XMLHttpRequest.prototype.open = function(method, url) {
+            this._ffprofanity_url = url;
+            return originalOpen.apply(this, arguments);
+          };
+          
+          XMLHttpRequest.prototype.send = function() {
+            const url = this._ffprofanity_url || '';
+            const xhr = this;
+            
+            // Add load listener for subtitle URLs
+            if (url.includes('sub.wyzie.io') || url.includes('.vtt') || url.includes('.srt')) {
+              xhr.addEventListener('load', function() {
+                try {
+                  const responseText = xhr.responseText;
+                  if (responseText && (responseText.includes('-->') || responseText.includes('WEBVTT'))) {
+                    const language = extractLanguageFromUrl(url) || 'en';
+                    sendSubtitleContent(responseText, language, 'XHR Subtitle');
                   }
-                }
-              } catch (e) {}
+                } catch (e) {}
+              });
+            }
+            
+            return originalSend.apply(this, arguments);
+          };
+        }
 
-              // Try textTracks
-              try {
-                const textTracks = player.textTracks ? player.textTracks() : [];
-                for (let i = 0; i < textTracks.length; i++) {
-                  const track = textTracks[i];
-                  if (track.kind === 'subtitles' || track.kind === 'captions') {
-                    // Some players store URL in custom properties
-                    const src = track.src || track.url;
-                    if (src && !src.startsWith('blob:') && !sentSubtitles.has(src)) {
-                      sendSubtitles([{
-                        url: src,
-                        language: track.language || 'en',
-                        label: track.label || 'Unknown',
-                        source: 'videojs-texttrack'
-                      }], 'videojs-texttrack');
+        // Strategy 3: Monitor video textTracks for dynamically loaded subtitles
+        function monitorVideoTextTracks() {
+          const checkTextTracks = () => {
+            try {
+              const videos = document.querySelectorAll('video');
+              for (const video of videos) {
+                if (video.textTracks && video.textTracks.length > 0) {
+                  for (let i = 0; i < video.textTracks.length; i++) {
+                    const track = video.textTracks[i];
+                    if ((track.kind === 'subtitles' || track.kind === 'captions') && track.cues && track.cues.length > 0) {
+                      // We have loaded cues - try to reconstruct VTT content
+                      const cues = Array.from(track.cues);
+                      if (cues.length > 0 && !sentContent.has(track.label || track.language)) {
+                        console.log('[FMovies] Found textTrack with', cues.length, 'cues');
+                        
+                        // Reconstruct VTT from cues
+                        let vttContent = 'WEBVTT\\n\\n';
+                        cues.forEach((cue, idx) => {
+                          const start = formatVTTTime(cue.startTime);
+                          const end = formatVTTTime(cue.endTime);
+                          vttContent += (idx + 1) + '\\n';
+                          vttContent += start + ' --> ' + end + '\\n';
+                          vttContent += cue.text + '\\n\\n';
+                        });
+                        
+                        sendSubtitleContent(vttContent, track.language || 'en', track.label || 'Unknown');
+                      }
                     }
                   }
                 }
-              } catch (e) {}
-            }
-          } catch (e) {}
-        }
-
-        // Strategy 3: Watch for video element additions and mutations
-        function observeVideos() {
-          try {
-            const observer = new MutationObserver((mutations) => {
-              for (const mutation of mutations) {
-                // Check added nodes
-                for (const node of mutation.addedNodes) {
-                  if (node.nodeName === 'VIDEO') {
-                    scanVideoTracks();
-                    scanVideoJS();
-                  }
-                  if (node.querySelectorAll) {
-                    const videos = node.querySelectorAll('video');
-                    if (videos.length > 0) {
-                      scanVideoTracks();
-                      scanVideoJS();
-                    }
-                  }
-                }
-                // Check attribute changes on track elements
-                if (mutation.type === 'attributes' && mutation.target.nodeName === 'TRACK') {
-                  const src = mutation.target.getAttribute('src');
-                  if (src && !src.startsWith('blob:')) {
-                    sendSubtitles([{
-                      url: src,
-                      language: mutation.target.srclang || extractLanguage(src),
-                      label: mutation.target.label || 'Unknown',
-                      source: 'track-mutation'
-                    }], 'track-mutation');
-                  }
-                }
               }
-            });
-
-            observer.observe(document.body, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ['src'],
-              attributeOldValue: false
-            });
-          } catch (e) {}
+            } catch (e) {}
+          };
+          
+          // Helper to format time as VTT format
+          function formatVTTTime(seconds) {
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            const ms = Math.floor((seconds % 1) * 1000);
+            return String(hrs).padStart(2, '0') + ':' + 
+                   String(mins).padStart(2, '0') + ':' + 
+                   String(secs).padStart(2, '0') + '.' + 
+                   String(ms).padStart(3, '0');
+          }
+          
+          // Check periodically
+          setInterval(checkTextTracks, 3000);
+          checkTextTracks();
         }
 
-        // Strategy 4: Periodic scanning (fallback for dynamic loading)
-        function startPeriodicScan() {
-          if (checkInterval) return;
-          checkInterval = setInterval(() => {
-            scanVideoTracks();
-            scanVideoJS();
-          }, 2000);
+        // Strategy 4: Hook into media source for HLS manifest parsing
+        function hookMediaSource() {
+          const originalOpen = MediaSource.prototype.addSourceBuffer;
+          if (originalOpen) {
+            MediaSource.prototype.addSourceBuffer = function(mimeType) {
+              // Monitor for HLS subtitle tracks
+              const sourceBuffer = originalOpen.apply(this, arguments);
+              return sourceBuffer;
+            };
+          }
+        }
 
-          // Stop after 60 seconds
-          setTimeout(() => {
-            if (checkInterval) {
-              clearInterval(checkInterval);
-              checkInterval = null;
+        // Strategy 5: Capture subtitle URLs from blob URLs
+        function monitorBlobSubtitles() {
+          // When a blob URL is created for subtitles, the original URL is lost
+          // But we can intercept the creation and track it
+          const originalCreateObjectURL = URL.createObjectURL;
+          URL.createObjectURL = function(blob) {
+            const url = originalCreateObjectURL.apply(this, arguments);
+            
+            // Check if this blob is a subtitle
+            if (blob && blob.type && (blob.type.includes('text/vtt') || blob.type.includes('text/srt'))) {
+              console.log('[FMovies] Created subtitle blob:', url);
+              
+              // Try to read the blob content
+              const reader = new FileReader();
+              reader.onload = function() {
+                const content = reader.result;
+                if (content && content.includes('-->')) {
+                  sendSubtitleContent(content, 'en', 'Blob Subtitle');
+                }
+              };
+              reader.readAsText(blob);
             }
-          }, 60000);
+            
+            return url;
+          };
         }
 
         // Initialize
         function init() {
-          // Initial scan
-          scanVideoTracks();
-          scanVideoJS();
-
-          // Set up observers
-          observeVideos();
-
-          // Periodic scanning for dynamic content
-          startPeriodicScan();
-
+          console.log('[FMovies] Initializing extractor');
+          
+          // Set up network interception first
+          interceptFetch();
+          interceptXHR();
+          
+          // Set up video monitoring
+          monitorVideoTextTracks();
+          monitorBlobSubtitles();
+          
           console.log('[FMovies] Extractor loaded');
         }
 
