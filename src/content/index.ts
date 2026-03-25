@@ -56,6 +56,17 @@ let currentProfanityCue: Cue | null = null; // Track current profanity cue for m
 let playbackRate: number = 1.0; // Track playback speed
 let isMuted: boolean = false; // Track mute state to avoid redundant messages
 
+// Track last known good time to ignore hover preview seeks
+let lastStableTimeMs: number = 0;
+let pendingSeekTimeMs: number | null = null;
+let pendingSeekFrameCount: number = 0;
+let lastKnownTimeMs: number = 0; // Last known good time from display element
+let lastKnownTimeTimestamp: number = 0; // When we last read a valid time (for estimation)
+let timeEstimateOffset: number = 0; // Offset between display time and video.currentTime (for calibration)
+
+// Reference to time display element (for sites like fmovies where video.currentTime is unreliable)
+let timeDisplayElement: HTMLElement | null = null;
+
 // Debouncing
 let muteDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -879,6 +890,9 @@ function findVideoElement(): void {
       clearInterval(pollTimer);
       videoElement = videos[0] as HTMLVideoElement;
       attachVideoListeners(videoElement);
+      
+      // Find time display element for sites like fmovies where video.currentTime is unreliable
+      findTimeDisplayElement();
 
       // Start monitoring if we have cues and video found
       // Check !animationFrameId to avoid starting duplicate loops
@@ -953,6 +967,132 @@ function attachVideoListeners(video: HTMLVideoElement): void {
     // Don't stop monitoring on pause, just let the loop continue
     // This ensures we're ready when playback resumes
   });
+}
+
+/**
+ * Find the time display element on the page
+ * For sites like fmovies, the video.currentTime is affected by hover preview,
+ * so we look for the displayed time element which shows the actual playback position
+ */
+function findTimeDisplayElement(): void {
+  // Look for elements that display time in MM:SS or HH:MM:SS format
+  // fmovies has: current time (left) and duration (right) in the player controls
+  // We want the current time which updates during playback
+  
+  const timePattern = /^\d{1,3}:\d{2}$/;
+  const candidates: Array<{ element: HTMLElement; position: number }> = [];
+  
+  // Find all elements with time-like text content
+  const allElements = document.querySelectorAll('span, div, p');
+  for (const el of Array.from(allElements)) {
+    const text = el.textContent?.trim() || '';
+    if (timePattern.test(text)) {
+      const rect = el.getBoundingClientRect();
+      // Get the element's horizontal position - current time is typically on the LEFT
+      // Duration/total time is typically on the RIGHT
+      if (rect.width > 0 && rect.height > 0) {
+        candidates.push({
+          element: el as HTMLElement,
+          position: rect.left // Lower value = more left = more likely to be current time
+        });
+      }
+    }
+  }
+  
+  if (candidates.length === 0) {
+    console.log('[FFProfanity] No time display elements found');
+    return;
+  }
+  
+  // Sort by position - leftmost is likely current time
+  candidates.sort((a, b) => a.position - b.position);
+  
+  // Take the leftmost as current time, second-leftmost as duration
+  timeDisplayElement = candidates[0].element;
+  console.log(`[FFProfanity] Found time display element: "${candidates[0].element.textContent?.trim()}" (${candidates.length} candidates, using leftmost)`);
+}
+
+/**
+ * Parse time string (MM:SS or HH:MM:SS) to milliseconds
+ */
+function parseTimeString(timeStr: string): number | null {
+  const parts = timeStr.split(':').map(p => parseInt(p, 10));
+  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+    return (parts[0] * 60 + parts[1]) * 1000;
+  }
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+  }
+  return null;
+}
+
+/**
+ * Get current playback time in milliseconds
+ * Uses time display element if available AND visible (for sites like fmovies),
+ * otherwise falls back to video.currentTime with hover preview detection
+ */
+function getCurrentTimeMs(): { timeMs: number; source: string } {
+  // Periodically re-find the time display element (controls might get re-created)
+  if (!timeDisplayElement || !timeDisplayElement.isConnected) {
+    findTimeDisplayElement();
+  }
+  
+  const now = performance.now();
+  
+  // Try time display element first (for sites like fmovies where video.currentTime is unreliable)
+  if (timeDisplayElement && timeDisplayElement.isConnected) {
+    // Check if element is visible (not hidden by player controls auto-hide)
+    const rect = timeDisplayElement.getBoundingClientRect();
+    const style = window.getComputedStyle(timeDisplayElement);
+    const isVisible = style.display !== 'none' && 
+                      style.visibility !== 'hidden' && 
+                      parseFloat(style.opacity) > 0 &&
+                      rect.width > 0 && rect.height > 0;
+    
+    const timeStr = timeDisplayElement.textContent?.trim() || '';
+    const timeMs = parseTimeString(timeStr);
+    
+    if (isVisible && timeMs !== null && timeMs >= 0) {
+      // Validate: if video has a currentTime > 0 and display shows 0, display is wrong
+      // (happens when player reinitializes but display hasn't updated)
+      const videoTime = videoElement ? videoElement.currentTime * 1000 : 0;
+      if (videoTime > 5000 && timeMs < 1000 && lastKnownTimeMs > 5000) {
+        // Display shows 0 but we have higher cached value - use cached estimation
+        // This happens when video element gets replaced but display element shows stale 00:00
+        const elapsedMs = (now - lastKnownTimeTimestamp);
+        const estimatedTimeMs = lastKnownTimeMs + (elapsedMs * playbackRate);
+        return { timeMs: Math.min(estimatedTimeMs, lastKnownTimeMs + 10000), source: 'estimated' }; // Cap at +10s
+      }
+      
+      // Cache the last known good time with timestamp
+      lastKnownTimeMs = timeMs;
+      lastKnownTimeTimestamp = now;
+      return { timeMs, source: 'display' };
+    }
+  }
+  
+  // If display element is hidden, estimate time from last known position
+  // This works when controls auto-hide during playback
+  if (lastKnownTimeMs > 0 && videoElement && !videoElement.paused && lastKnownTimeTimestamp > 0) {
+    // Estimate: last known time + (elapsed wall-clock time × playback rate)
+    const elapsedMs = (now - lastKnownTimeTimestamp); // wall-clock ms since last reading
+    const estimatedTimeMs = lastKnownTimeMs + (elapsedMs * playbackRate);
+    
+    // Sanity check: don't estimate beyond video duration
+    const durationMs = (videoElement.duration || 0) * 1000;
+    if (durationMs > 0 && estimatedTimeMs > durationMs) {
+      return { timeMs: durationMs, source: 'estimated' };
+    }
+    
+    return { timeMs: estimatedTimeMs, source: 'estimated' };
+  }
+  
+  // Fallback to video.currentTime (affected by hover previews on some sites)
+  if (videoElement) {
+    return { timeMs: videoElement.currentTime * 1000, source: 'video' };
+  }
+  
+  return { timeMs: 0, source: 'none' };
 }
 
 /**
@@ -1626,23 +1766,93 @@ function startMonitoring(): void {
   );
 
   const updateLoop = () => {
-    // Stop if video was lost or no longer active
-    if (!isActive || !videoElement) {
+    // Stop if not active
+    if (!isActive) {
       animationFrameId = null;
       return;
     }
 
-    // Safety check: stop if video element was disconnected
-    if (
-      !videoElement.isConnected &&
-      !document.fullscreenElement?.contains(videoElement)
-    ) {
-      console.log("[FFProfanity] Video element disconnected, stopping loop");
-      animationFrameId = null;
-      return;
+    // Try to re-find video if disconnected (fmovies replaces video elements)
+    if (videoElement && !videoElement.isConnected && !document.fullscreenElement?.contains(videoElement)) {
+      // Video was disconnected, try to find a new one
+      const newVideo = document.querySelector('video');
+      if (newVideo && newVideo.isConnected) {
+        console.log("[FFProfanity] Found new video element after disconnect");
+        videoElement = newVideo as HTMLVideoElement;
+        attachVideoListeners(videoElement);
+        findTimeDisplayElement(); // Re-find time display for new video
+      } else {
+        // No video found, stop loop
+        console.log("[FFProfanity] Video element disconnected, stopping loop");
+        animationFrameId = null;
+        return;
+      }
     }
 
-    updatePlayback(videoElement.currentTime * 1000);
+    // Use time display element if available (for sites like fmovies where video.currentTime is unreliable)
+    // Otherwise fall back to video.currentTime
+    const { timeMs: currentTimeMs, source: timeSource } = getCurrentTimeMs();
+
+    // When using video.currentTime, detect hover preview seeks (transient jumps that quickly revert)
+    // Hover preview: seek to hover position, then quickly seek back when mouse leaves
+    // Legitimate seek: stays at new position (user clicked)
+    // Note: This detection is only needed when falling back to video.currentTime
+    const usingVideoTime = timeSource === 'video';
+    const videoPaused = videoElement?.paused ?? true;
+
+    if (usingVideoTime && !videoPaused && lastStableTimeMs > 0) {
+      const frameAdvanceMs = 20 * playbackRate; // ~20ms per frame at 60fps
+      const jumpThreshold = frameAdvanceMs * 3; // 3 frames worth = ~60ms, anything larger is a seek
+      const actualJump = currentTimeMs - lastStableTimeMs;
+
+      if (Math.abs(actualJump) > jumpThreshold) {
+        // Large jump detected during playback - could be hover preview or legitimate seek
+        // Start tracking this pending seek
+        if (pendingSeekTimeMs === null) {
+          pendingSeekTimeMs = currentTimeMs;
+          pendingSeekFrameCount = 0;
+        }
+        pendingSeekFrameCount++;
+
+        // After ~5 frames (~80ms), check if we're still at the new position
+        if (pendingSeekFrameCount >= 5) {
+          const timeDrift = Math.abs(currentTimeMs - (pendingSeekTimeMs || 0));
+          // Still near the jumped position? It's a legitimate seek
+          if (timeDrift < jumpThreshold) {
+            // Legitimate seek confirmed - accept the new time
+            lastStableTimeMs = currentTimeMs;
+            pendingSeekTimeMs = null;
+            pendingSeekFrameCount = 0;
+            updatePlayback(currentTimeMs);
+          }
+          // Otherwise keep waiting for it to stabilize
+        }
+        animationFrameId = requestAnimationFrame(updateLoop);
+        return;
+      }
+
+      // Check if we're recovering from a pending seek that reverted
+      if (pendingSeekTimeMs !== null) {
+        // Time has returned to near where it was before the jump - hover preview ended
+        if (Math.abs(currentTimeMs - lastStableTimeMs) < jumpThreshold * 2) {
+          // Hover preview reverted, clear pending state
+          pendingSeekTimeMs = null;
+          pendingSeekFrameCount = 0;
+          // Continue with normal playback using lastStableTimeMs
+          updatePlayback(lastStableTimeMs);
+          animationFrameId = requestAnimationFrame(updateLoop);
+          return;
+        }
+      }
+    }
+
+    // Clear pending state on normal playback (or when using display element)
+    pendingSeekTimeMs = null;
+    pendingSeekFrameCount = 0;
+
+    // Time is stable - use it
+    lastStableTimeMs = currentTimeMs;
+    updatePlayback(currentTimeMs);
     animationFrameId = requestAnimationFrame(updateLoop);
   };
 
