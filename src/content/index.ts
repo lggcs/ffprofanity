@@ -364,6 +364,11 @@ function handleInterceptedMessage(event: MessageEvent): void {
 
   // Handle subtitle content (fetched in page context with cookies)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
+    // Skip if no video element - only process subtitles in frame with video
+    if (!videoElement) {
+      console.log("[FFProfanity] Skipping subtitle content - no video element in this frame");
+      return;
+    }
     const { content, language, label, source, segmentLoadTime, streamType } =
       event.data;
     console.log(
@@ -390,6 +395,13 @@ function handleInterceptedMessage(event: MessageEvent): void {
 
   // Handle track metadata
   if (event.data?.type !== "FFPROFANITY_SUBTITLES_DETECTED") return;
+
+  // Skip if no video element - only process subtitles in frame with video
+  // This prevents iframes from processing subtitles
+  if (!videoElement) {
+    console.log("[FFProfanity] Skipping subtitle detection - no video element in this frame");
+    return;
+  }
 
   const { subtitles, source } = event.data;
   console.log(
@@ -848,8 +860,10 @@ function findVideoElement(): void {
       videoElement = videos[0] as HTMLVideoElement;
       attachVideoListeners(videoElement);
 
-      // Start monitoring if we have cues
-      if (cues.length > 0 && !isActive) {
+      // Start monitoring if we have cues and video found
+      // Check !animationFrameId to avoid starting duplicate loops
+      if (cues.length > 0 && !animationFrameId) {
+        console.log("[FFProfanity] Video found with cues ready, starting monitoring");
         isActive = true;
         startMonitoring();
       }
@@ -868,6 +882,12 @@ function findVideoElement(): void {
           console.log("[FFProfanity] Video element added via mutation");
           videoElement = node;
           attachVideoListeners(videoElement);
+          // Start monitoring if we have cues ready
+          if (cues.length > 0 && !animationFrameId) {
+            console.log("[FFProfanity] Video mutation found with cues ready, starting monitoring");
+            isActive = true;
+            startMonitoring();
+          }
         } else if (node instanceof HTMLElement) {
           // Check descendants for video
           const nestedVideos = Array.from(node.querySelectorAll("video"));
@@ -875,6 +895,12 @@ function findVideoElement(): void {
             console.log("[FFProfanity] Video found in added subtree");
             videoElement = nestedVideos[0];
             attachVideoListeners(videoElement);
+            // Start monitoring if we have cues ready
+            if (cues.length > 0 && !animationFrameId) {
+              console.log("[FFProfanity] Video subtree found with cues ready, starting monitoring");
+              isActive = true;
+              startMonitoring();
+            }
           }
         }
       }
@@ -911,12 +937,11 @@ function attachVideoListeners(video: HTMLVideoElement): void {
 
 /**
  * Handle seek events - immediately mute if landing in profanity
+ * Note: Do NOT clear cues on seek for static VOD content (SRT/VTT files)
+ * Cue clearing is only needed for live HLS segments that need timing recalculation
  */
 function handleVideoSeeked(): void {
   if (!videoElement || !isActive || cues.length === 0) return;
-
-  // Clear cues on seek since timing will be recalculated on next segment
-  cues = [];
 
   const currentTimeMs = videoElement.currentTime * 1000;
   const profanityCue = cueIndex.findProfanityCue(
@@ -924,7 +949,7 @@ function handleVideoSeeked(): void {
     settings.offsetMs,
   );
 
-  // Debug: show cue count and offset
+  // Debug: show seek info
   const profanityCount = cues.filter((c) => c.hasProfanity).length;
   console.log(
     `[FFProfanity] SEEK to ${videoElement.currentTime.toFixed(2)}s (${currentTimeMs}ms), offset: ${settings.offsetMs}ms, total cues: ${cues.length}, profanity cues: ${profanityCount}`,
@@ -1466,11 +1491,10 @@ function processCues(newCues: Cue[]): void {
   // Sort by start time
   cues.sort((a, b) => a.startMs - b.startMs);
 
-  // Limit total cues to prevent memory issues (keep last 5 minutes = 300000ms)
-  const maxCues = 500;
-  if (cues.length > maxCues) {
-    cues = cues.slice(-maxCues);
-  }
+  // For static subtitle files, keep all cues - no limit needed
+  // The comment about "last 5 minutes" was incorrect; we need ALL cues
+  // for VOD content to cover the entire video.
+  // Memory usage is acceptable: 2000 cues ≈ 2MB.
 
   // Build index for fast lookup
   cueIndex.build(cues);

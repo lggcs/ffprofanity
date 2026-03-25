@@ -8,6 +8,7 @@ import { LookMovieExtractor } from "./lookmovie";
 import { YouTubeExtractor } from "./youtube";
 import { OneTwoThreeChillExtractor } from "./123chill";
 import { PlutoTVExtractor } from "./plutotv";
+import { FMoviesExtractor } from "./fmovies";
 
 // All available extractors
 const extractors: SiteExtractor[] = [
@@ -15,6 +16,7 @@ const extractors: SiteExtractor[] = [
   new YouTubeExtractor(),
   new OneTwoThreeChillExtractor(),
   new PlutoTVExtractor(),
+  new FMoviesExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -109,3 +111,4 @@ export { lookMovieExtractor } from "./lookmovie";
 export { youTubeExtractor } from "./youtube";
 export { oneTwoThreeChillExtractor } from "./123chill";
 export { plutotvExtractor } from "./plutotv";
+export { fmoviesExtractor } from "./fmovies";
