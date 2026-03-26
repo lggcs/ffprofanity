@@ -366,12 +366,37 @@ function injectApiInterceptor(): void {
 
 /**
  * Handle intercepted subtitle data from injected script
- * Handles two message types:
+ * Handles three message types:
  * - FFPROFANITY_SUBTITLES_DETECTED: Track metadata (URL, language, label)
  * - FFPROFANITY_SUBTITLE_CONTENT: Actual subtitle content fetched in page context
+ * - FFPROFANITY_SUBTITLE_CAPTURED: Content captured from intercepted network responses
  */
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
+
+  // Handle subtitle content captured from network interception (YouTube timedtext)
+  if (event.data?.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
+    if (!videoElement) {
+      console.log("[FFProfanity] Skipping captured subtitle - no video element in this frame");
+      return;
+    }
+    const { content, language, isAsr, videoId, url } = event.data;
+    console.log(
+      `[FFProfanity] Captured timedtext content: ${content?.length || 0} bytes for ${language} (video: ${videoId})`,
+    );
+
+    if (content && content.length > 10) {
+      const label = isAsr ? `${language.toUpperCase()} (Auto-generated)` : language.toUpperCase();
+      handleSubtitleContent(
+        content,
+        language,
+        label,
+        "youtube-intercepted",
+        videoElement ? Math.round(videoElement.currentTime * 1000) : undefined,
+      );
+    }
+    return;
+  }
 
   // Handle subtitle content (fetched in page context with cookies)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
@@ -466,6 +491,12 @@ function handleSubtitleContent(
   segmentLoadTimeMs?: number,
   streamType?: string,
 ): void {
+  // Debug: Log first 500 chars to diagnose format issues
+  console.log(
+    `[FFProfanity] Parsing subtitle content (${content?.length || 0} bytes). First 500 chars:`,
+    content?.substring(0, 500)
+  );
+  
   const rawResult = parseSubtitle(content, 0);
 
   if (rawResult.cues.length === 0) {
@@ -1027,71 +1058,82 @@ function parseTimeString(timeStr: string): number | null {
 }
 
 /**
+ * Sites where video.currentTime is unreliable (affected by hover previews, etc.)
+ * On these sites, we read the time from DOM elements instead.
+ */
+const SITES_NEEDING_DISPLAY_TIME = [
+  /fmovies\.[a-z]+/i,
+  /fmovies\d*\.[a-z]+/i,
+  /123movies\.[a-z]+/i,
+  /123chill\.[a-z]+/i,
+  /lookmovie\.[a-z]+/i,
+];
+
+/**
+ * Check if current site needs display-based time tracking
+ */
+function needsDisplayTimeTracking(): boolean {
+  try {
+    const hostname = window.location.hostname;
+    return SITES_NEEDING_DISPLAY_TIME.some(pattern => pattern.test(hostname));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get current playback time in milliseconds
- * Uses time display element if available AND visible (for sites like fmovies),
- * otherwise falls back to video.currentTime with hover preview detection
+ * Primary: video.currentTime (reliable on YouTube and most sites)
+ * Fallback: time display element (for fmovies and similar sites)
  */
 function getCurrentTimeMs(): { timeMs: number; source: string } {
-  // Periodically re-find the time display element (controls might get re-created)
-  if (!timeDisplayElement || !timeDisplayElement.isConnected) {
-    findTimeDisplayElement();
-  }
-  
   const now = performance.now();
-  
-  // Try time display element first (for sites like fmovies where video.currentTime is unreliable)
-  if (timeDisplayElement && timeDisplayElement.isConnected) {
-    // Check if element is visible (not hidden by player controls auto-hide)
-    const rect = timeDisplayElement.getBoundingClientRect();
-    const style = window.getComputedStyle(timeDisplayElement);
-    const isVisible = style.display !== 'none' && 
-                      style.visibility !== 'hidden' && 
-                      parseFloat(style.opacity) > 0 &&
-                      rect.width > 0 && rect.height > 0;
-    
-    const timeStr = timeDisplayElement.textContent?.trim() || '';
-    const timeMs = parseTimeString(timeStr);
-    
-    if (isVisible && timeMs !== null && timeMs >= 0) {
-      // Validate: if video has a currentTime > 0 and display shows 0, display is wrong
-      // (happens when player reinitializes but display hasn't updated)
-      const videoTime = videoElement ? videoElement.currentTime * 1000 : 0;
-      if (videoTime > 5000 && timeMs < 1000 && lastKnownTimeMs > 5000) {
-        // Display shows 0 but we have higher cached value - use cached estimation
-        // This happens when video element gets replaced but display element shows stale 00:00
-        const elapsedMs = (now - lastKnownTimeTimestamp);
-        const estimatedTimeMs = lastKnownTimeMs + (elapsedMs * playbackRate);
-        return { timeMs: Math.min(estimatedTimeMs, lastKnownTimeMs + 10000), source: 'estimated' }; // Cap at +10s
+
+  // On sites where video.currentTime is unreliable (fmovies), use display element
+  if (needsDisplayTimeTracking()) {
+    // Re-find time display element periodically
+    if (!timeDisplayElement || !timeDisplayElement.isConnected) {
+      findTimeDisplayElement();
+    }
+
+    if (timeDisplayElement && timeDisplayElement.isConnected) {
+      const rect = timeDisplayElement.getBoundingClientRect();
+      const style = window.getComputedStyle(timeDisplayElement);
+      const isVisible = style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        parseFloat(style.opacity) > 0 &&
+                        rect.width > 0 && rect.height > 0;
+
+      const timeStr = timeDisplayElement.textContent?.trim() || '';
+      const timeMs = parseTimeString(timeStr);
+
+      if (isVisible && timeMs !== null && timeMs >= 0) {
+        lastKnownTimeMs = timeMs;
+        lastKnownTimeTimestamp = now;
+        return { timeMs, source: 'display' };
       }
-      
-      // Cache the last known good time with timestamp
-      lastKnownTimeMs = timeMs;
-      lastKnownTimeTimestamp = now;
-      return { timeMs, source: 'display' };
+    }
+
+    // Estimate from last known position if display is hidden
+    if (lastKnownTimeMs > 0 && videoElement && !videoElement.paused && lastKnownTimeTimestamp > 0) {
+      const elapsedMs = (now - lastKnownTimeTimestamp);
+      const estimatedTimeMs = lastKnownTimeMs + (elapsedMs * playbackRate);
+      const durationMs = (videoElement.duration || 0) * 1000;
+      if (durationMs > 0 && estimatedTimeMs > durationMs) {
+        return { timeMs: durationMs, source: 'estimated' };
+      }
+      return { timeMs: estimatedTimeMs, source: 'estimated' };
     }
   }
-  
-  // If display element is hidden, estimate time from last known position
-  // This works when controls auto-hide during playback
-  if (lastKnownTimeMs > 0 && videoElement && !videoElement.paused && lastKnownTimeTimestamp > 0) {
-    // Estimate: last known time + (elapsed wall-clock time × playback rate)
-    const elapsedMs = (now - lastKnownTimeTimestamp); // wall-clock ms since last reading
-    const estimatedTimeMs = lastKnownTimeMs + (elapsedMs * playbackRate);
-    
-    // Sanity check: don't estimate beyond video duration
-    const durationMs = (videoElement.duration || 0) * 1000;
-    if (durationMs > 0 && estimatedTimeMs > durationMs) {
-      return { timeMs: durationMs, source: 'estimated' };
-    }
-    
-    return { timeMs: estimatedTimeMs, source: 'estimated' };
-  }
-  
-  // Fallback to video.currentTime (affected by hover previews on some sites)
+
+  // Default: use video.currentTime (reliable on YouTube and most sites)
   if (videoElement) {
-    return { timeMs: videoElement.currentTime * 1000, source: 'video' };
+    const videoTime = videoElement.currentTime * 1000;
+    lastKnownTimeMs = videoTime;
+    lastKnownTimeTimestamp = now;
+    return { timeMs: videoTime, source: 'video' };
   }
-  
+
   return { timeMs: 0, source: 'none' };
 }
 

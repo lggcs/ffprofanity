@@ -16,6 +16,10 @@ export default defineConfig({
           __dirname,
           "src/page-scripts/plutotv-injected.ts",
         ),
+        "page-scripts/youtube": resolve(
+          __dirname,
+          "src/page-scripts/youtube-injected.ts",
+        ),
       },
       output: {
         entryFileNames: (chunkInfo) => {

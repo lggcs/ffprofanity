@@ -13,7 +13,7 @@ export interface XTimestampMap {
 
 export interface ParseResult {
   cues: Cue[];
-  format: "srt" | "ass" | "vtt";
+  format: "srt" | "ass" | "vtt" | "xml" | "json3";
   errors: string[];
   timestampMap?: XTimestampMap;
 }
@@ -95,9 +95,20 @@ export function parseXTimestampMap(content: string): XTimestampMap | null {
 /**
  * Determine subtitle format from content
  */
-export function detectFormat(content: string): "srt" | "ass" | "vtt" | null {
+export function detectFormat(content: string): "srt" | "ass" | "vtt" | "xml" | "json3" | null {
   // Remove BOM and trim whitespace
   const trimmed = content.replace(/^\uFEFF/, "").trim();
+
+  // YouTube JSON3 format (wireMagic: pb3)
+  if (trimmed.startsWith("{") && trimmed.includes('"wireMagic"')) {
+    return "json3";
+  }
+
+  // YouTube Timedtext XML format (most common from timedtext API)
+  // Can be <transcript> or TTML format
+  if (trimmed.match(/^<\?xml/) || trimmed.match(/<transcript[\s>]/i) || trimmed.match(/<tt\s/i)) {
+    return "xml";
+  }
 
   // WEBVTT can have optional headers after WEBVTT, e.g., "WEBVTT\nX-TIMESTAMP-MAP..."
   // Also check for YouTube's format which may have "WEBVTT" at start
@@ -322,6 +333,223 @@ export function parseASS(content: string): Cue[] {
 }
 
 /**
+ * Parse YouTube Timedtext XML format
+ * Handles both <transcript> format and TTML format
+ * 
+ * YouTube <transcript> format:
+ * <transcript>
+ *   <text start="0" dur="2.5">Hello world</text>
+ *   <text start="3" dur="1.5">How are you?</text>
+ * </transcript>
+ * 
+ * TTML format:
+ * <tt ...>
+ *   <body>
+ *     <div>
+ *       <p begin="0s" end="2.5s">Hello world</p>
+ *     </div>
+ *   </body>
+ * </tt>
+ */
+export function parseYouTubeXML(content: string): Cue[] {
+  const cues: Cue[] = [];
+  let id = 0;
+
+  // Decode HTML entities
+  function decodeHTMLEntities(text: string): string {
+    const entities: Record<string, string> = {
+      '&amp;': '&',
+      '&lt;': '<',
+      '&gt;': '>',
+      '&quot;': '"',
+      '&#39;': "'",
+      '&apos;': "'",
+      '&nbsp;': ' ',
+    };
+    return text.replace(/&[^;]+;/g, (match) => entities[match] || match);
+  }
+
+  // Parse time from various formats
+  function parseTime(timeStr: string): number {
+    // Handle seconds (e.g., "2.5", "2.500")
+    const floatMatch = timeStr.match(/^(\d+(?:\.\d+)?)$/);
+    if (floatMatch) {
+      return Math.round(parseFloat(floatMatch[1]) * 1000);
+    }
+
+    // Handle HH:MM:SS.mmm format
+    const fullMatch = timeStr.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
+    if (fullMatch) {
+      const hours = parseInt(fullMatch[1], 10) * 3600000;
+      const minutes = parseInt(fullMatch[2], 10) * 60000;
+      const seconds = Math.round(parseFloat(fullMatch[3]) * 1000);
+      return hours + minutes + seconds;
+    }
+
+    // Handle MM:SS.mmm format
+    const shortMatch = timeStr.match(/(\d+):(\d+(?:\.\d+)?)/);
+    if (shortMatch) {
+      const minutes = parseInt(shortMatch[1], 10) * 60000;
+      const seconds = Math.round(parseFloat(shortMatch[2]) * 1000);
+      return minutes + seconds;
+    }
+
+    return 0;
+  }
+
+  // Extract text content from XML node (handling nested elements)
+  function extractTextContent(node: Element): string {
+    // For TTML, text might be in <span> elements
+    let text = '';
+    
+    // Check for <span> children
+    const spans = node.querySelectorAll('span');
+    if (spans.length > 0) {
+      spans.forEach(span => {
+        text += span.textContent + ' ';
+      });
+      return text.trim();
+    }
+    
+    // Use textContent directly
+    return node.textContent?.trim() || '';
+  }
+
+  try {
+    // Use DOMParser for browser environment
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content, 'text/xml');
+
+    // Check for parsing errors
+    const parseError = doc.querySelector('parsererror');
+    if (parseError) {
+      // Try to extract error message
+      console.warn('[Parser] XML parsing error:', parseError.textContent);
+      return [];
+    }
+
+    // Try YouTube <transcript> format first
+    const textElements = doc.querySelectorAll('text');
+    if (textElements.length > 0) {
+      textElements.forEach((elem) => {
+        const start = parseFloat(elem.getAttribute('start') || '0');
+        const dur = parseFloat(elem.getAttribute('dur') || '0');
+        const text = decodeHTMLEntities(elem.textContent?.trim() || '');
+
+        if (text && dur > 0) {
+          cues.push(createCue(
+            id,
+            Math.round(start * 1000),
+            Math.round((start + dur) * 1000),
+            text
+          ));
+          id++;
+        }
+      });
+
+      // Sort by start time
+      cues.sort((a, b) => a.startMs - b.startMs);
+      return cues;
+    }
+
+    // Try TTML format
+    const pElements = doc.querySelectorAll('p');
+    if (pElements.length > 0) {
+      pElements.forEach((elem) => {
+        const begin = parseTime(elem.getAttribute('begin') || '0');
+        const end = parseTime(elem.getAttribute('end') || '0');
+        const text = decodeHTMLEntities(extractTextContent(elem));
+
+        if (text && end > begin) {
+          cues.push(createCue(id, begin, end, text));
+          id++;
+        }
+      });
+
+      cues.sort((a, b) => a.startMs - b.startMs);
+      return cues;
+    }
+
+    // Try <body><div><p> structure (another TTML variant)
+    const bodyElements = doc.querySelectorAll('body p, body div p');
+    if (bodyElements.length > 0) {
+      bodyElements.forEach((elem) => {
+        const begin = parseTime(elem.getAttribute('begin') || '0');
+        const end = parseTime(elem.getAttribute('end') || '0');
+        const text = decodeHTMLEntities(extractTextContent(elem));
+
+        if (text && end > begin) {
+          cues.push(createCue(id, begin, end, text));
+          id++;
+        }
+      });
+
+      cues.sort((a, b) => a.startMs - b.startMs);
+      return cues;
+    }
+
+  } catch (error) {
+    console.error('[Parser] Error parsing YouTube XML:', error);
+  }
+
+  return cues;
+}
+
+/**
+ * Parse YouTube JSON3 format (wireMagic: pb3)
+ * This is YouTube's newer caption format returned by timedtext API.
+ * 
+ * Format structure:
+ * {
+ *   "wireMagic": "pb3",
+ *   "events": [{
+ *     "tStartMs": 0,
+ *     "dDurationMs": 16639,
+ *     "segs": [{ "utf8": "Hello" }, { "utf8": " world" }]
+ *   }]
+ * }
+ */
+export function parseYouTubeJSON3(content: string): Cue[] {
+  const cues: Cue[] = [];
+  let id = 0;
+
+  try {
+    const data = JSON.parse(content);
+    
+    // Validate it's JSON3 format
+    if (data.wireMagic !== "pb3" || !Array.isArray(data.events)) {
+      console.warn('[Parser] Not valid JSON3 format');
+      return [];
+    }
+
+    for (const event of data.events) {
+      if (!event.segs || !Array.isArray(event.segs)) continue;
+      
+      const startMs = event.tStartMs || 0;
+      const durationMs = event.dDurationMs || 0;
+      const endMs = startMs + durationMs;
+      
+      // Concatenate all segments into text
+      const text = event.segs
+        .map((seg: any) => seg.utf8 || '')
+        .join('')
+        .trim();
+      
+      if (text && durationMs > 0) {
+        cues.push(createCue(id, startMs, endMs, text));
+        id++;
+      }
+    }
+
+    cues.sort((a, b) => a.startMs - b.startMs);
+  } catch (error) {
+    console.error('[Parser] Error parsing YouTube JSON3:', error);
+  }
+
+  return cues;
+}
+
+/**
  * Sanitize text for safe DOM insertion
  */
 export function sanitizeText(text: string): string {
@@ -342,7 +570,7 @@ export function parseSubtitle(
 
   if (!format) {
     errors.push(
-      "Unable to detect subtitle format. Supported formats: SRT, ASS/SSA, WEBVTT",
+      "Unable to detect subtitle format. Supported formats: SRT, ASS/SSA, WEBVTT, XML, JSON3",
     );
     return { cues: [], format: "srt", errors };
   }
@@ -361,6 +589,12 @@ export function parseSubtitle(
       case "vtt":
         cues = parseVTT(content, offsetMs);
         timestampMap = parseXTimestampMap(content) || undefined;
+        break;
+      case "xml":
+        cues = parseYouTubeXML(content);
+        break;
+      case "json3":
+        cues = parseYouTubeJSON3(content);
         break;
     }
 

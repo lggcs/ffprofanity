@@ -487,6 +487,12 @@ async function injectPageScriptForUrl(
   tabId: number,
   url: string,
 ): Promise<boolean> {
+  // Prevent double injection
+  if (injectedTabs.has(tabId)) {
+    return false;
+  }
+
+  // PlutoTV injection
   if (/pluto\.tv|plutotv\.com/i.test(url)) {
     try {
       await browser.scripting.executeScript({
@@ -499,6 +505,24 @@ async function injectPageScriptForUrl(
       return true;
     } catch (error) {
       console.error(`[FFProfanity] Failed to inject script:`, error);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
+  // YouTube injection - bypasses CSP by using MAIN world
+  if (/youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/youtube-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      console.log(`[FFProfanity] Injected YouTube script into tab ${tabId}`);
+      return true;
+    } catch (error) {
+      console.error(`[FFProfanity] Failed to inject YouTube script:`, error);
       injectedTabs.delete(tabId);
       return false;
     }
