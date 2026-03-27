@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Profanity Filter",
+  "name": "Profanity Filter (Dev)",
   "version": "1.0.0",
   "description": "Mute profanity and display censored subtitles while watching videos. All processing is done locally to protect your privacy.",
   "author": "ffprofanity",
@@ -15,10 +15,7 @@
     "tabs",
     "storage",
     "activeTab",
-    "webRequest",
-    "webNavigation",
-    "scripting",
-    "declarativeNetRequest"
+    "webNavigation"
   ],
   "host_permissions": ["<all_urls>"],
   "web_accessible_resources": [
@@ -34,7 +31,7 @@
       "32": "icons/icon-32.png",
       "48": "icons/icon-48.png"
     },
-    "default_title": "Profanity Filter"
+    "default_title": "Profanity Filter (Dev)"
   },
   "background": {
     "scripts": ["background.js"],
@@ -50,7 +47,7 @@
   ],
   "options_ui": {
     "page": "options.html",
-    "open_in_tab": true,
+    "open_in_tab": false,
     "browser_style": false
   },
   "commands": {
@@ -62,6 +59,12 @@
     },
     "move-right": {
       "description": "Increase subtitle offset (later)"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "dev@ffprofanity.local",
+      "strict_min_version": "109.0"
     }
   }
 }

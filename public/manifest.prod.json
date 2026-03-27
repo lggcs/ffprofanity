@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "Profanity Filter",
+  "version": "1.0.0",
+  "description": "Mute profanity and display censored subtitles while watching videos. All processing is done locally to protect your privacy.",
+  "author": "ffprofanity",
+  "homepage_url": "https://github.com/ffprofanity/ffprofanity",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "webNavigation"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-scripts/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "Profanity Filter"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false,
+    "browser_style": false
+  },
+  "commands": {
+    "_execute_action": {
+      "description": "Open popup"
+    },
+    "move-left": {
+      "description": "Decrease subtitle offset (earlier)"
+    },
+    "move-right": {
+      "description": "Increase subtitle offset (later)"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ffprofanity@example.com",
+      "strict_min_version": "109.0"
+    },
+    "gecko_android": {}
+  }
+}

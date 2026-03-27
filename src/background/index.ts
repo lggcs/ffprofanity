@@ -147,9 +147,20 @@ async function getAggregatedStatus(tabId: number): Promise<{
 
   try {
     // Get all frames in the tab
-    const frames = await browser.webNavigation.getAllFrames({ tabId });
+    let frames: { frameId: number; url: string }[] = [];
+    try {
+      frames = await browser.webNavigation.getAllFrames({ tabId });
+    } catch (e) {
+      // webNavigation permission may not be available, query main frame only
+      console.log("[FFProfanity] webNavigation.getAllFrames failed, querying main frame only");
+    }
 
-    // Query each frame
+    if (!frames || frames.length === 0) {
+      // Fallback: query main frame (frameId 0) directly
+      frames = [{ frameId: 0, url: "" }];
+    }
+
+    // Query each frame, with error handling for cross-origin frames
     const framePromises = frames.map(async (frame) => {
       try {
         const response = await browser.tabs.sendMessage(
@@ -157,19 +168,27 @@ async function getAggregatedStatus(tabId: number): Promise<{
           { type: "getStatus" },
           { frameId: frame.frameId },
         );
-        return response;
-      } catch {
-        // Frame might not have content script loaded, ignore
+        return { frameId: frame.frameId, response };
+      } catch (e) {
+        // Cross-origin frames may reject messages, that's OK
         return null;
       }
     });
 
     const results = await Promise.all(framePromises);
 
-    for (const status of results) {
-      if (!status || typeof status !== "object") continue;
+    // Process results - prioritize main frame (frameId 0) for currentTrack
+    // Sort so main frame comes first
+    results.sort((a, b) => {
+      if (!a) return 1;
+      if (!b) return -1;
+      return a.frameId - b.frameId;
+    });
 
-      const s = status as {
+    for (const result of results) {
+      if (!result || !result.response || typeof result.response !== "object") continue;
+
+      const s = result.response as {
         active?: boolean;
         cueCount?: number;
         profanityCount?: number;
@@ -183,6 +202,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
       if (s.cueCount) totalCues = Math.max(totalCues, s.cueCount);
       if (s.profanityCount)
         totalProfanity = Math.max(totalProfanity, s.profanityCount);
+      // Take currentTrack from first frame that has one (main frame comes first due to sort)
       if (s.currentTrack && !currentTrack) currentTrack = s.currentTrack;
       if (s.detectedTracks) {
         for (const track of s.detectedTracks) {
@@ -194,23 +214,23 @@ async function getAggregatedStatus(tabId: number): Promise<{
         }
       }
     }
+
+    console.log(`[FFProfanity] Aggregated status for tab ${tabId}: hasVideo=${hasVideo}, cues=${totalCues}, active=${active}`);
   } catch (error) {
-    console.error("Error getting frame status:", error);
+    console.error("[FFProfanity] Error getting frame status:", error);
   }
 
-  // Fallback to cached status if no video found
-  if (!hasVideo) {
-    const cached = tabStatus.get(tabId);
-    if (cached?.hasVideo) {
-      return {
-        active: cached.active,
-        cueCount: cached.cueCount,
-        profanityCount: cached.profanityCount,
-        hasVideo: cached.hasVideo,
-        currentTrack: cached.currentTrack,
-        detectedTracks: cached.detectedTracks,
-      };
-    }
+  // Update cache
+  if (hasVideo) {
+    tabStatus.set(tabId, {
+      hasVideo,
+      active,
+      cueCount: totalCues,
+      profanityCount: totalProfanity,
+      currentTrack,
+      detectedTracks: allTracks,
+      lastUpdated: Date.now(),
+    });
   }
 
   return {

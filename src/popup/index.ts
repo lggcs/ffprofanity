@@ -10,6 +10,7 @@ import type { Settings, SubtitleTrack } from "../types";
 let isActive = false;
 let currentTrack: SubtitleTrack | null = null;
 let detectedTracks: SubtitleTrack[] = [];
+let settings: Partial<Settings> = {};
 
 // DOM Elements - initialized in init()
 let statusEl: HTMLElement;
@@ -17,31 +18,246 @@ let trackSection: HTMLElement;
 let currentTrackName: HTMLElement;
 let trackList: HTMLElement;
 let trackOptions: HTMLElement;
+let mainView: HTMLElement;
+let settingsView: HTMLElement;
 
 async function init(): Promise<void> {
+  // Get DOM elements
+  mainView = document.getElementById("mainView") as HTMLElement;
+  settingsView = document.getElementById("settingsView") as HTMLElement;
   statusEl = document.getElementById("status") as HTMLElement;
   trackSection = document.getElementById("trackSection") as HTMLElement;
   currentTrackName = document.getElementById("currentTrackName") as HTMLElement;
   trackList = document.getElementById("trackList") as HTMLElement;
   trackOptions = document.getElementById("trackOptions") as HTMLElement;
 
-  const toggleBtn = document.getElementById("toggle") as HTMLElement;
-  const optionsBtn = document.getElementById("options") as HTMLElement;
-  const changeTrackBtn = document.getElementById(
-    "changeTrackBtn",
-  ) as HTMLElement;
-  const subtitleFileInput = document.getElementById(
-    "subtitleFile",
-  ) as HTMLInputElement;
-
   // Load current status
   await loadStatus();
+  
+  // Load settings for the settings view
+  await loadSettings();
 
   // Setup event handlers
+  setupEventHandlers();
+}
+
+function setupEventHandlers(): void {
+  // Main view buttons
+  const toggleBtn = document.getElementById("toggle") as HTMLButtonElement;
+  const optionsBtn = document.getElementById("options") as HTMLButtonElement;
+  const changeTrackBtn = document.getElementById("changeTrackBtn") as HTMLButtonElement;
+  const subtitleFileInput = document.getElementById("subtitleFile") as HTMLInputElement;
+  const openFullOptions = document.getElementById("openFullOptions") as HTMLAnchorElement;
+
   toggleBtn.addEventListener("click", handleToggle);
-  optionsBtn.addEventListener("click", handleOptions);
+  optionsBtn.addEventListener("click", showSettingsView);
   changeTrackBtn.addEventListener("click", toggleTrackList);
   subtitleFileInput.addEventListener("change", handleFileUpload);
+  
+  // Full options link opens in new tab
+  openFullOptions.addEventListener("click", (e) => {
+    e.preventDefault();
+    browser.tabs.create({ url: browser.runtime.getURL("options.html") });
+  });
+
+  // Settings view buttons
+  const backBtn = document.getElementById("backBtn") as HTMLButtonElement;
+  const saveSettingsBtn = document.getElementById("saveSettings") as HTMLButtonElement;
+  const offsetBackBtn = document.getElementById("offsetBack") as HTMLButtonElement;
+  const offsetForwardBtn = document.getElementById("offsetForward") as HTMLButtonElement;
+  const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
+  const sensitivitySelect = document.getElementById("sensitivity") as HTMLSelectElement;
+  const showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
+  const showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
+  const useSubstitutionsCheckbox = document.getElementById("useSubstitutions") as HTMLInputElement;
+  const substitutionCategorySelect = document.getElementById("substitutionCategory") as HTMLSelectElement;
+  const fontSizeSelect = document.getElementById("fontSize") as HTMLSelectElement;
+  const positionSelect = document.getElementById("position") as HTMLSelectElement;
+
+  backBtn.addEventListener("click", showMainView);
+  saveSettingsBtn.addEventListener("click", saveSettings);
+  
+  offsetBackBtn.addEventListener("click", () => adjustOffset(-500));
+  offsetForwardBtn.addEventListener("click", () => adjustOffset(500));
+  offsetSlider.addEventListener("input", updateOffsetDisplay);
+  
+  // Toggle substitution category visibility
+  useSubstitutionsCheckbox.addEventListener("change", () => {
+    substitutionCategorySelect.classList.toggle("hidden", !useSubstitutionsCheckbox.checked);
+  });
+}
+
+async function loadSettings(): Promise<void> {
+  try {
+    settings = await browser.storage.local.get("settings") as { settings?: Partial<Settings> };
+    settings = settings.settings || {};
+
+    // Update settings view with loaded values
+    const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
+    const offsetValue = document.getElementById("offsetValue") as HTMLElement;
+    const sensitivitySelect = document.getElementById("sensitivity") as HTMLSelectElement;
+    const showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
+    const showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
+    const useSubstitutionsCheckbox = document.getElementById("useSubstitutions") as HTMLInputElement;
+    const substitutionCategorySelect = document.getElementById("substitutionCategory") as HTMLSelectElement;
+    const fontSizeSelect = document.getElementById("fontSize") as HTMLSelectElement;
+    const positionSelect = document.getElementById("position") as HTMLSelectElement;
+
+    // Color settings
+    const fontColorInput = document.getElementById("fontColor") as HTMLInputElement;
+    const fontColorText = document.getElementById("fontColorText") as HTMLInputElement;
+    const backgroundColorInput = document.getElementById("backgroundColor") as HTMLInputElement;
+    const backgroundColorText = document.getElementById("backgroundColorText") as HTMLInputElement;
+    const backgroundOpacitySlider = document.getElementById("backgroundOpacity") as HTMLInputElement;
+    const opacityValue = document.getElementById("opacityValue") as HTMLElement;
+
+    offsetSlider.value = String(settings.offsetMs || 0);
+    offsetValue.textContent = `${settings.offsetMs || 0}ms`;
+    sensitivitySelect.value = settings.sensitivity || "medium";
+    showUpcomingCheckbox.checked = settings.showUpcomingCues !== false;
+    showProfanityOnlyCheckbox.checked = settings.showProfanityOnly === true;
+    useSubstitutionsCheckbox.checked = settings.useSubstitutions === true;
+    substitutionCategorySelect.value = settings.substitutionCategory || "silly";
+    fontSizeSelect.value = settings.fontSize || "medium";
+    positionSelect.value = settings.position || "bottom";
+
+    // Load color settings
+    const fontColor = settings.fontColor || "#ffffff";
+    const bgColor = settings.backgroundColor || "#000000";
+    const bgOpacity = settings.backgroundOpacity ?? 80;
+
+    fontColorInput.value = fontColor;
+    fontColorText.value = fontColor;
+    backgroundColorInput.value = bgColor;
+    backgroundColorText.value = bgColor;
+    backgroundOpacitySlider.value = String(bgOpacity);
+    opacityValue.textContent = `${bgOpacity}%`;
+
+    // Show/hide category select based on substitutions checkbox
+    substitutionCategorySelect.classList.toggle("hidden", !useSubstitutionsCheckbox.checked);
+
+    // Setup color input sync
+    setupColorSync();
+  } catch (error) {
+    console.error("Failed to load settings:", error);
+  }
+}
+
+function setupColorSync(): void {
+  // Sync color picker with text input
+  const fontColorPicker = document.getElementById("fontColor") as HTMLInputElement;
+  const fontColorText = document.getElementById("fontColorText") as HTMLInputElement;
+  const bgColorPicker = document.getElementById("backgroundColor") as HTMLInputElement;
+  const bgColorText = document.getElementById("backgroundColorText") as HTMLInputElement;
+
+  fontColorPicker.addEventListener("input", () => {
+    fontColorText.value = fontColorPicker.value;
+  });
+  fontColorText.addEventListener("input", () => {
+    if (/^#[0-9A-Fa-f]{6}$/.test(fontColorText.value)) {
+      fontColorPicker.value = fontColorText.value;
+    }
+  });
+
+  bgColorPicker.addEventListener("input", () => {
+    bgColorText.value = bgColorPicker.value;
+  });
+  bgColorText.addEventListener("input", () => {
+    if (/^#[0-9A-Fa-f]{6}$/.test(bgColorText.value)) {
+      bgColorPicker.value = bgColorText.value;
+    }
+  });
+}
+
+async function saveSettings(): Promise<void> {
+  try {
+    const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
+    const sensitivitySelect = document.getElementById("sensitivity") as HTMLSelectElement;
+    const showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
+    const showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
+    const useSubstitutionsCheckbox = document.getElementById("useSubstitutions") as HTMLInputElement;
+    const substitutionCategorySelect = document.getElementById("substitutionCategory") as HTMLSelectElement;
+    const fontSizeSelect = document.getElementById("fontSize") as HTMLSelectElement;
+    const positionSelect = document.getElementById("position") as HTMLSelectElement;
+
+    // Color settings
+    const fontColorInput = document.getElementById("fontColor") as HTMLInputElement;
+    const backgroundColorInput = document.getElementById("backgroundColor") as HTMLInputElement;
+    const backgroundOpacitySlider = document.getElementById("backgroundOpacity") as HTMLInputElement;
+
+    const newSettings: Partial<Settings> = {
+      offsetMs: parseInt(offsetSlider.value, 10),
+      sensitivity: sensitivitySelect.value as "low" | "medium" | "high",
+      showUpcomingCues: showUpcomingCheckbox.checked,
+      showProfanityOnly: showProfanityOnlyCheckbox.checked,
+      useSubstitutions: useSubstitutionsCheckbox.checked,
+      substitutionCategory: substitutionCategorySelect.value as "silly" | "polite" | "random" | "monkeys" | "custom",
+      fontSize: fontSizeSelect.value as "small" | "medium" | "large" | "xlarge",
+      position: positionSelect.value as "bottom" | "middle" | "top",
+      fontColor: fontColorInput.value,
+      backgroundColor: backgroundColorInput.value,
+      backgroundOpacity: parseInt(backgroundOpacitySlider.value, 10),
+    };
+
+    // Save to storage
+    const existingSettings = (await browser.storage.local.get("settings")) as { settings?: Settings };
+    await browser.storage.local.set({
+      settings: {
+        ...existingSettings.settings,
+        ...newSettings,
+      },
+    });
+
+    // Notify content script of settings change
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tab.id) {
+      await browser.tabs.sendMessage(tab.id, {
+        type: "updateSettings",
+        settings: newSettings,
+      });
+    }
+
+    // Show success notification briefly
+    const saveBtn = document.getElementById("saveSettings") as HTMLButtonElement;
+    const originalText = saveBtn.textContent;
+    saveBtn.textContent = "Saved!";
+    saveBtn.disabled = true;
+    setTimeout(() => {
+      saveBtn.textContent = originalText;
+      saveBtn.disabled = false;
+    }, 1500);
+
+    // Switch back to main view after a short delay
+    setTimeout(showMainView, 800);
+  } catch (error) {
+    console.error("Failed to save settings:", error);
+  }
+}
+
+function adjustOffset(amount: number): void {
+  const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
+  const offsetValue = document.getElementById("offsetValue") as HTMLElement;
+  
+  const current = parseInt(offsetSlider.value, 10);
+  const newValue = Math.max(-10000, Math.min(10000, current + amount));
+  offsetSlider.value = String(newValue);
+  offsetValue.textContent = `${newValue}ms`;
+}
+
+function updateOffsetDisplay(): void {
+  const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
+  const offsetValue = document.getElementById("offsetValue") as HTMLElement;
+  offsetValue.textContent = `${offsetSlider.value}ms`;
+}
+
+function showSettingsView(): void {
+  mainView.classList.add("hidden");
+  settingsView.classList.remove("hidden");
+}
+
+function showMainView(): void {
+  settingsView.classList.add("hidden");
+  mainView.classList.remove("hidden");
 }
 
 async function loadStatus(): Promise<void> {
@@ -238,11 +454,6 @@ async function handleToggle(): Promise<void> {
 
   // Reload status
   await loadStatus();
-}
-
-async function handleOptions(): Promise<void> {
-  await browser.runtime.openOptionsPage();
-  window.close();
 }
 
 async function handleFileUpload(event: Event): Promise<void> {
