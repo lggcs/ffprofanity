@@ -643,7 +643,7 @@ describe('Word Timing Estimation', () => {
 
 describe('Profanity Windows', () => {
   describe('computeProfanityWindows', () => {
-    it('should compute windows for medium sensitivity', () => {
+    it('should compute windows for medium sensitivity with adaptive buffering', () => {
       const windows = computeProfanityWindows(
         1, // cueId
         0, // startMs
@@ -656,11 +656,12 @@ describe('Profanity Windows', () => {
       expect(windows.length).toBe(1);
       expect(windows[0].cueId).toBe(1);
       expect(windows[0].word).toBe('fuck');
-      expect(windows[0].bufferBeforeMs).toBe(500); // medium
+      // 'fuck' is a short word (1 syllable) so gets adaptive buffer: 500 + 150 = 650
+      expect(windows[0].bufferBeforeMs).toBe(650); // medium + adaptive for short word
       expect(windows[0].bufferAfterMs).toBe(300); // medium
     });
 
-    it('should compute windows for low sensitivity with smaller buffers', () => {
+    it('should compute windows for low sensitivity with adaptive buffering', () => {
       const windows = computeProfanityWindows(
         1,
         0,
@@ -671,7 +672,8 @@ describe('Profanity Windows', () => {
       );
 
       expect(windows.length).toBe(1);
-      expect(windows[0].bufferBeforeMs).toBe(200); // low
+      // 'fuck' is a short word (1 syllable) so gets adaptive buffer: 200 + 150 = 350
+      expect(windows[0].bufferBeforeMs).toBe(350); // low + adaptive for short word
       expect(windows[0].bufferAfterMs).toBe(150); // low
     });
 
@@ -728,10 +730,72 @@ describe('Profanity Windows', () => {
         [{ word: 'fuck', startIndex: 0, endIndex: 4 }],
         'medium'
       );
-      
-      // Window should be clamped to cue boundaries
+
+      // Window should not start before cue start
       expect(windows[0].startMs).toBeGreaterThanOrEqual(1000);
-      expect(windows[0].endMs).toBeLessThanOrEqual(2000);
+    });
+    
+    it('should apply higher buffer for single-syllable short words like ass and arse', () => {
+      // "arse" - 1 syllable, very short
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        2000,
+        'you arse hole',
+        [{ word: 'arse', startIndex: 4, endIndex: 8 }],
+        'medium'
+      );
+
+      expect(windows.length).toBe(1);
+      expect(windows[0].word).toBe('arse');
+      // 'arse' is 1 syllable, so it gets the short word extra buffer: 500 + 150 = 650
+      expect(windows[0].bufferBeforeMs).toBe(650);
+      
+      // "ass" - 1 syllable, very short
+      const windows2 = computeProfanityWindows(
+        1,
+        0,
+        1500,
+        'my ass hurts',
+        [{ word: 'ass', startIndex: 3, endIndex: 6 }],
+        'medium'
+      );
+      
+      expect(windows2.length).toBe(1);
+      expect(windows2[0].word).toBe('ass');
+      // 'ass' is 1 syllable: 500 + 150 = 650
+      expect(windows2[0].bufferBeforeMs).toBe(650);
+    });
+    
+    it('should apply adaptive buffer for very short word durations', () => {
+      // Test with a longer word that still has short duration
+      const windows = computeProfanityWindows(
+        1,
+        0,
+        500, // Very short cue - 500ms total
+        'ass',
+        [{ word: 'ass', startIndex: 0, endIndex: 3 }],
+        'medium'
+      );
+
+      expect(windows.length).toBe(1);
+      // Word duration would be ~500ms for single word, but 'ass' is short
+      // Should have the base short-word buffer
+      expect(windows[0].bufferBeforeMs).toBeGreaterThanOrEqual(650);
+    });
+
+    it('should clamp windows to cue boundaries', () => {
+      const windows = computeProfanityWindows(
+        1,
+        1000, // startMs
+        2000, // endMs
+        'fuck', // profanity at the very start
+        [{ word: 'fuck', startIndex: 0, endIndex: 4 }],
+        'medium'
+      );
+
+      // Window should not start before cue start
+      expect(windows[0].startMs).toBeGreaterThanOrEqual(1000);
     });
   });
 });

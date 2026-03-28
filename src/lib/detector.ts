@@ -185,7 +185,7 @@ export function computeProfanityWindows(
   if (matches.length === 0 || sensitivity === 'high') {
     return [];
   }
-  
+
   // Buffer settings based on sensitivity
   // Buffers account for timing uncertainty in syllable-based word estimation
   // Pre-buffer is larger because missing the start of a word is worse (you hear the profanity)
@@ -194,29 +194,49 @@ export function computeProfanityWindows(
     medium: { before: 500, after: 300 },   // Balanced - catches word onset without over-muting
     high: { before: 200, after: 50 }       // Not used (high mutes entire cue)
   };
-  
+
   const buffer = bufferSettings[sensitivity];
   const windows: ProfanityWindow[] = [];
-  
+
   for (const match of matches) {
     const { wordStartMs, wordEndMs } = estimateWordTiming(
       cueStartMs, cueEndMs, cueText, match.word, match.startIndex
     );
+
+    // Calculate word syllables for adaptive buffering
+    const wordSyllables = countSyllables(match.word);
+    const wordDuration = wordEndMs - wordStartMs;
     
+    // Short words (1-2 syllables) need larger pre-buffer due to higher relative timing uncertainty
+    // Also, very short word durations (< 300ms) need extra buffer
+    const isShortWord = wordSyllables <= 2;
+    const isVeryShortDuration = wordDuration < 300;
+    
+    // Calculate adaptive pre-buffer
+    let adaptivePreBuffer = buffer.before;
+    if (isShortWord) {
+      // Add extra buffer for short words - they're harder to time accurately
+      adaptivePreBuffer += 150; // Extra 150ms for short words
+    }
+    if (isVeryShortDuration) {
+      // Extra buffer for very short durations
+      adaptivePreBuffer += 100;
+    }
+
     const window: ProfanityWindow = {
       cueId,
       word: match.word,
-      startMs: Math.max(cueStartMs, wordStartMs - buffer.before),
+      startMs: Math.max(cueStartMs, wordStartMs - adaptivePreBuffer),
       endMs: Math.min(cueEndMs, wordEndMs + buffer.after),
       wordStartMs,
       wordEndMs,
-      bufferBeforeMs: buffer.before,
+      bufferBeforeMs: adaptivePreBuffer,
       bufferAfterMs: buffer.after
     };
-    
+
     windows.push(window);
   }
-  
+
   return windows;
 }
 
@@ -269,17 +289,21 @@ const SUBSTITUTIONS: Record<string, string> = {
 
 // Obfuscation pattern regexes - match letters with special chars between them
 // Using word boundaries to avoid partial matches
+// Obfuscation characters: underscore, punctuation, symbols - but NOT apostrophes or spaces
+// This prevents false positives like "He'll" -> "hell" while catching "f_u_c_k"
+const OBFUSCATION_CHARS = '[_\\-.*@#$&%!?]';
+
 const OBFUSCATION_PATTERNS = [
-  { pattern: /\bf[\W_]*u[\W_]*c[\W_]*k\b/gi, word: 'fuck' },
-  { pattern: /\bs[\W_]*h[\W_]*i[\W_]*t\b/gi, word: 'shit' },
-  { pattern: /\bb[\W_]*i[\W_]*t[\W_]*c[\W_]*h\b/gi, word: 'bitch' },
-  { pattern: /\bc[\W_]*u[\W_]*n[\W_]*t\b/gi, word: 'cunt' },
-  { pattern: /\bd[\W_]*i[\W_]*c[\W_]*k\b/gi, word: 'dick' },
-  { pattern: /\ba[\W_]*s[\W_]*s\b/gi, word: 'ass' },
-  { pattern: /\bp[\W_]*u[\W_]*s[\W_]*s[\W_]*y\b/gi, word: 'pussy' },
-  { pattern: /\bb[\W_]*a[\W_]*s[\W_]*t[\W_]*a[\W_]*r[\W_]*d\b/gi, word: 'bastard' },
-  { pattern: /\bd[\W_]*a[\W_]*m[\W_]*n\b/gi, word: 'damn' },
-  { pattern: /\bh[\W_]*e[\W_]*l[\W_]*l\b/gi, word: 'hell' },
+  { pattern: new RegExp(`\\bf${OBFUSCATION_CHARS}*u${OBFUSCATION_CHARS}*c${OBFUSCATION_CHARS}*k${OBFUSCATION_CHARS}*s?\\b`, 'gi'), word: 'fuck' },
+  { pattern: new RegExp(`\\bs${OBFUSCATION_CHARS}*h${OBFUSCATION_CHARS}*i${OBFUSCATION_CHARS}*t${OBFUSCATION_CHARS}*s?\\b`, 'gi'), word: 'shit' },
+  { pattern: new RegExp(`\\bb${OBFUSCATION_CHARS}*i${OBFUSCATION_CHARS}*t${OBFUSCATION_CHARS}*c${OBFUSCATION_CHARS}*h(?:es)?\\b`, 'gi'), word: 'bitch' },
+  { pattern: new RegExp(`\\bc${OBFUSCATION_CHARS}*u${OBFUSCATION_CHARS}*n${OBFUSCATION_CHARS}*t${OBFUSCATION_CHARS}*s?\\b`, 'gi'), word: 'cunt' },
+  { pattern: new RegExp(`\\bd${OBFUSCATION_CHARS}*i${OBFUSCATION_CHARS}*c${OBFUSCATION_CHARS}*k${OBFUSCATION_CHARS}*s?\\b`, 'gi'), word: 'dick' },
+  { pattern: new RegExp(`\\ba${OBFUSCATION_CHARS}*s${OBFUSCATION_CHARS}*s(?:holes?|wipes?|es)?\\b`, 'gi'), word: 'ass' },
+  { pattern: new RegExp(`\\bp${OBFUSCATION_CHARS}*u${OBFUSCATION_CHARS}*s${OBFUSCATION_CHARS}*s${OBFUSCATION_CHARS}*y\\b`, 'gi'), word: 'pussy' },
+  { pattern: new RegExp(`\\bb${OBFUSCATION_CHARS}*a${OBFUSCATION_CHARS}*s${OBFUSCATION_CHARS}*t${OBFUSCATION_CHARS}*a${OBFUSCATION_CHARS}*r${OBFUSCATION_CHARS}*d${OBFUSCATION_CHARS}*s?\\b`, 'gi'), word: 'bastard' },
+  { pattern: new RegExp(`\\bd${OBFUSCATION_CHARS}*a${OBFUSCATION_CHARS}*m${OBFUSCATION_CHARS}*n\\b`, 'gi'), word: 'damn' },
+  { pattern: new RegExp(`\\bh${OBFUSCATION_CHARS}*e${OBFUSCATION_CHARS}*l${OBFUSCATION_CHARS}*l\\b`, 'gi'), word: 'hell' },
 ];
 
 export interface ProfanityMatch {
