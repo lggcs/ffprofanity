@@ -198,6 +198,9 @@ export function computeProfanityWindows(
   const buffer = bufferSettings[sensitivity];
   const windows: ProfanityWindow[] = [];
 
+  // Calculate total syllables once for position-relative timing
+  const cueDuration = cueEndMs - cueStartMs;
+
   for (const match of matches) {
     const { wordStartMs, wordEndMs } = estimateWordTiming(
       cueStartMs, cueEndMs, cueText, match.word, match.startIndex
@@ -206,21 +209,41 @@ export function computeProfanityWindows(
     // Calculate word syllables for adaptive buffering
     const wordSyllables = countSyllables(match.word);
     const wordDuration = wordEndMs - wordStartMs;
-    
+
     // Short words (1-2 syllables) need larger pre-buffer due to higher relative timing uncertainty
     // Also, very short word durations (< 300ms) need extra buffer
     const isShortWord = wordSyllables <= 2;
     const isVeryShortDuration = wordDuration < 300;
-    
+
+    // IMPORTANT: Use CHARACTER position, not syllable-estimated time position
+    // Syllable estimation pushes end-of-cue words WAY too late because it assumes
+    // uniform speaking rate, but function words ("in the", "a") are spoken 2-3x faster
+    // Example: "Bloody pain in the ass" - syllable method estimates "ass" at ~80% time
+    //          but character position is 85%, and actual speech is even earlier
+    const charPositionRatio = match.startIndex / cueText.length;
+
     // Calculate adaptive pre-buffer
     let adaptivePreBuffer = buffer.before;
     if (isShortWord) {
-      // Add extra buffer for short words - they're harder to time accurately
-      adaptivePreBuffer += 150; // Extra 150ms for short words
+      adaptivePreBuffer += 150;
     }
     if (isVeryShortDuration) {
-      // Extra buffer for very short durations
       adaptivePreBuffer += 100;
+    }
+
+    // CRITICAL FIX: Words in last 50% of TEXT need aggressive pre-buffer
+    // Function words before content words at the end are spoken very fast
+    // Content word "ass" may start 500-1000ms EARLIER than syllable estimate
+    if (charPositionRatio > 0.5) {
+      // Exponential bonus - last word needs the most
+      // At 50%: +200ms, at 70%: +500ms, at 85%: +950ms, at 95%: +1400ms
+      const excessRatio = (charPositionRatio - 0.5) / 0.5; // 0 to 1
+      const positionBonus = Math.round(200 + 1200 * excessRatio * excessRatio);
+      adaptivePreBuffer += positionBonus;
+    } else if (charPositionRatio > 0.3) {
+      // Middle region: smaller progressive bonus
+      const positionBonus = Math.round(150 * (charPositionRatio - 0.3) / 0.2);
+      adaptivePreBuffer += positionBonus;
     }
 
     const window: ProfanityWindow = {
