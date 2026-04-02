@@ -12,9 +12,10 @@ interface CueNode {
 }
 
 // Pre-mute buffer in milliseconds - mute this many ms before profanity starts
-const MUTE_ADVANCE_MS = 200;
+// Large buffer needed because YouTube auto-generated captions start AFTER speech
+const MUTE_ADVANCE_MS = 500;
 // Post-mute buffer - stay muted this many ms after profanity ends
-const MUTE_DELAY_MS = 50;
+const MUTE_DELAY_MS = 25;
 
 export class CueIndex {
   private cues: Cue[] = [];
@@ -200,8 +201,11 @@ export class CueIndex {
       const mid = Math.floor((low + high) / 2);
       const window = this.profanityWindows[mid];
 
-      // Check if we're within this window
-      if (adjustedTime >= window.startMs && adjustedTime <= window.endMs) {
+      // Check if we're within this window (with advance buffer for early muting)
+      const windowStartWithBuffer = window.startMs - MUTE_ADVANCE_MS;
+      const windowEndWithBuffer = window.endMs + MUTE_DELAY_MS;
+
+      if (adjustedTime >= windowStartWithBuffer && adjustedTime <= windowEndWithBuffer) {
         return window;
       }
 

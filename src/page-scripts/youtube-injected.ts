@@ -421,7 +421,7 @@ export function youTubePageScript(): void {
   function setupCaptionButtonListener(): void {
     // YouTube's captions are lazily loaded - they're fetched when user clicks CC button
     // We monitor for caption button clicks to capture the timedtext requests
-    
+
     document.addEventListener("click", (e) => {
       const target = e.target as HTMLElement;
       // Check if it's a caption/subtitle button
@@ -439,25 +439,89 @@ export function youTubePageScript(): void {
     }, true);
   }
 
+  /**
+   * Try to programmatically enable captions to trigger timedtext loading
+   * This simulates a CC button click to make YouTube fetch the captions
+   */
+  function tryEnableCaptions(): void {
+    // Find the CC button
+    const ccButton = document.querySelector('.ytp-subtitles-button') as HTMLButtonElement;
+    if (!ccButton) {
+      log("No CC button found");
+      return;
+    }
+
+    // Check if captions are already enabled (button has aria-pressed="true")
+    const isEnabled = ccButton.getAttribute('aria-pressed') === 'true';
+    
+    if (isEnabled) {
+      log("Captions already enabled, timedtext should be loading");
+      return;
+    }
+
+    // Check if we've already tried (avoid infinite loop)
+    if ((window as any).__ffprofanity_caption_triggered) {
+      log("Already tried enabling captions");
+      return;
+    }
+    (window as any).__ffprofanity_caption_triggered = true;
+
+    log("Clicking CC button to trigger caption loading");
+    
+    // Simulate click to enable captions
+    ccButton.click();
+    
+    // Optionally click again to toggle back off if user doesn't want captions
+    // But keep them on for a moment so timedtext loads
+    setTimeout(() => {
+      // Check if there are actual captions now
+      const tracks = document.querySelectorAll('track');
+      log("After CC click, found", tracks.length, "track elements");
+      
+      // Re-extract to get any new tracks
+      extractFromInitialPlayerResponse();
+    }, 1000);
+  }
+
   function init(): void {
     log("YouTube extractor initialized via MAIN world injection");
 
     // Interception is already set up above (IIFE)
-    
+
     // Run immediately if ready
     if (
       document.readyState === "complete" ||
       document.readyState === "interactive"
     ) {
       extractFromInitialPlayerResponse();
+      // Try to enable captions to trigger timedtext loading
+      setTimeout(tryEnableCaptions, 1500);
     } else {
-      document.addEventListener("DOMContentLoaded", extractFromInitialPlayerResponse);
+      document.addEventListener("DOMContentLoaded", () => {
+        extractFromInitialPlayerResponse();
+        // Try to enable captions after page loads
+        setTimeout(tryEnableCaptions, 1500);
+      });
     }
 
     // Setup watchers
     setupNavigationWatcher();
     setupResponseWatcher();
     setupCaptionButtonListener();
+
+    // Also try on player ready (for embedded players or late initialization)
+    // Watch for video element and try enabling captions when it appears
+    const videoObserver = new MutationObserver(() => {
+      const video = document.querySelector('video');
+      const ccButton = document.querySelector('.ytp-subtitles-button');
+      if (video && ccButton && !(window as any).__ffprofanity_caption_triggered) {
+        setTimeout(tryEnableCaptions, 500);
+      }
+    });
+    videoObserver.observe(document.body, { childList: true, subtree: true });
+    
+    // Disconnect after a few seconds to avoid overhead
+    setTimeout(() => videoObserver.disconnect(), 10000);
 
     log("ytInitialPlayerResponse extraction ready");
     log("Network interception active - will capture timedtext responses");

@@ -208,12 +208,11 @@ export function computeProfanityWindows(
 
     // Calculate word syllables for adaptive buffering
     const wordSyllables = countSyllables(match.word);
-    const wordDuration = wordEndMs - wordStartMs;
 
-    // Short words (1-2 syllables) need larger pre-buffer due to higher relative timing uncertainty
-    // Also, very short word durations (< 300ms) need extra buffer
+    // Short words (1-2 syllables) need buffer due to timing uncertainty
+    // Long words (>3 syllables) need more buffer as they take longer to say
     const isShortWord = wordSyllables <= 2;
-    const isVeryShortDuration = wordDuration < 300;
+    const isLongWord = wordSyllables > 3;
 
     // IMPORTANT: Use CHARACTER position, not syllable-estimated time position
     // Syllable estimation pushes end-of-cue words WAY too late because it assumes
@@ -224,11 +223,15 @@ export function computeProfanityWindows(
 
     // Calculate adaptive pre-buffer
     let adaptivePreBuffer = buffer.before;
+    
+    // Short words: ADD buffer (timing is harder to predict for short words)
     if (isShortWord) {
-      adaptivePreBuffer += 150;
-    }
-    if (isVeryShortDuration) {
       adaptivePreBuffer += 100;
+    }
+    
+    // Long words: slightly increase buffer (more syllables = more timing variance)
+    if (isLongWord) {
+      adaptivePreBuffer += 150;
     }
 
     // CRITICAL FIX: Words in last 50% of TEXT need aggressive pre-buffer

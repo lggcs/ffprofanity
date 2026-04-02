@@ -9,6 +9,7 @@ import {
   ProfanityDetector,
   createDetector,
   computeProfanityWindows,
+  ProfanityWindow,
 } from "../lib/detector";
 import { CueIndex } from "../lib/cueIndex";
 import {
@@ -53,6 +54,7 @@ let animationFrameId: ReturnType<typeof requestAnimationFrame> | null = null;
 let previousFirstCueMs: number | null = null;
 let lastCueId: number | null = null;
 let currentProfanityCue: Cue | null = null; // Track current profanity cue for mute state
+let currentProfanityWindow: ProfanityWindow | null = null; // Track current profanity window for medium/low sensitivity
 let playbackRate: number = 1.0; // Track playback speed
 let isMuted: boolean = false; // Track mute state to avoid redundant messages
 
@@ -334,14 +336,23 @@ function injectApiInterceptor(): void {
         });
       };
 
-      // Watch for CC button clicks (generic)
+      // Watch for CC button clicks (generic) - specific selectors to avoid false positives
       document.addEventListener('click', function(e) {
         const ccSelectors = [
-          '[class*="cc"]', '[class*="caption"]', '[class*="subtitle"]',
-          '[aria-label*="subtitle"]', '[aria-label*="caption"]', '[aria-label*="cc"]',
-          '.ytp-subtitles-button', '.cc-button'
+          // YouTube-specific CC button
+          '.ytp-subtitles-button',
+          // Generic subtitle/CC buttons (more specific to avoid play/pause matches)
+          'button[class*="subtitle"]:not(button[aria-label*="play"]):not(button[aria-label*="pause"])',
+          'button[class*="caption"]:not(button[aria-label*="play"]):not(button[aria-label*="pause"])',
+          'button[aria-label*="subtitle"]:not(button[aria-label*="play"]):not(button[aria-label*="pause"])',
+          'button[aria-label*="caption"]:not(button[aria-label*="play"]):not(button[aria-label*="pause"])',
+          'button[aria-label*="cc"]:not(button[aria-label*="play"]):not(button[aria-label*="pause"])',
+          // Elements with cc/subtitle class (not play/pause buttons)
+          '.cc-button:not([aria-label*="play"]):not([aria-label*="pause"])',
+          '.subtitle-button:not([aria-label*="play"]):not([aria-label*="pause"])',
+          '.caption-button:not([aria-label*="play"]):not([aria-label*="pause"])'
         ];
-        const target = e.target;
+        const target = e.target as HTMLElement;
         for (const sel of ccSelectors) {
           if (target.matches && (target.matches(sel) || target.closest?.(sel))) {
             console.log('[FFProfanity] CC button clicked');
@@ -1162,8 +1173,8 @@ function handleVideoSeeked(): void {
     console.log(
       `[FFProfanity] SEEK landed in profanity cue ${profanityCue.id}, muting`,
     );
-    sendMuteNow();
     currentProfanityCue = profanityCue;
+    sendMuteNow();
   } else if (!profanityCue && isMuted) {
     // Seeking out of profanity - unmute
     sendUnmuteNow();
@@ -1796,6 +1807,35 @@ function startMonitoring(): void {
     return;
   }
 
+  // Detect YouTube ad video: duration=NaN or very short (< 30s) indicates ad
+  const isAdVideo = isNaN(videoElement.duration) || videoElement.readyState < 1;
+
+  // On YouTube, multiple video elements may exist - try to find the main content video
+  if (isAdVideo) {
+    const allVideos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+    const validVideos = allVideos.filter(v =>
+      v.isConnected && v.duration > 30 && !isNaN(v.duration) && v.readyState >= 1
+    );
+
+    if (validVideos.length > 0) {
+      // Found a valid content video - use it instead
+      console.log(`[FFProfanity] Found main content video (duration=${validVideos[0].duration?.toFixed(2)}s) instead of ad video`);
+      videoElement = validVideos[0];
+      attachVideoListeners(videoElement);
+      findTimeDisplayElement();
+    } else {
+      // No valid video found - defer monitoring until ad ends
+      console.log(`[FFProfanity] Ad video detected (duration=${videoElement.duration}, readyState=${videoElement.readyState}), deferring monitoring...`);
+      // Schedule a retry in 500ms
+      setTimeout(() => {
+        if (cues.length > 0 && isActive) {
+          startMonitoring();
+        }
+      }, 500);
+      return;
+    }
+  }
+
   // Cancel any existing loop first - critical for multi-frame scenarios
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId);
@@ -1814,19 +1854,39 @@ function startMonitoring(): void {
       return;
     }
 
-    // Try to re-find video if disconnected (fmovies replaces video elements)
-    if (videoElement && !videoElement.isConnected && !document.fullscreenElement?.contains(videoElement)) {
-      // Video was disconnected, try to find a new one
-      const newVideo = document.querySelector('video');
-      if (newVideo && newVideo.isConnected) {
-        console.log("[FFProfanity] Found new video element after disconnect");
-        videoElement = newVideo as HTMLVideoElement;
+    // Handle disconnected video OR ad video (YouTube uses separate video for ads)
+    // Ad video characteristics: duration=NaN, readyState=0, or very short duration (< 30s)
+    // Only switch if current video is actually problematic (disconnected or invalid)
+    const currentVideoInvalid = !videoElement?.isConnected ||
+      !videoElement ||
+      isNaN(videoElement?.duration) ||
+      videoElement.readyState < 1;
+
+    if (currentVideoInvalid) {
+      // Current video is invalid, try to find a valid content video
+      const allVideos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+
+      // Filter for valid content videos: connected, valid duration, proper readyState
+      const validVideos = allVideos.filter(v => {
+        const isConnected = v.isConnected;
+        const hasValidDuration = !isNaN(v.duration) && v.duration > 30;
+        const hasValidReadyState = v.readyState >= 1;
+        return isConnected && (hasValidDuration || hasValidReadyState);
+      });
+
+      // Sort by duration descending - longest video is likely the main content
+      validVideos.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+
+      const mainVideo = validVideos[0];
+
+      if (mainVideo && mainVideo !== videoElement) {
+        console.log(`[FFProfanity] Switching to valid video (duration=${mainVideo.duration?.toFixed(2)}s, readyState=${mainVideo.readyState})`);
+        videoElement = mainVideo;
         attachVideoListeners(videoElement);
-        findTimeDisplayElement(); // Re-find time display for new video
-      } else {
-        // No video found, stop loop
-        console.log("[FFProfanity] Video element disconnected, stopping loop");
-        animationFrameId = null;
+        findTimeDisplayElement();
+      } else if (!mainVideo && !videoElement?.isConnected) {
+        // No valid video found and current video is disconnected - keep polling
+        animationFrameId = requestAnimationFrame(updateLoop);
         return;
       }
     }
@@ -1856,18 +1916,23 @@ function startMonitoring(): void {
         }
         pendingSeekFrameCount++;
 
-        // After ~5 frames (~80ms), check if we're still at the new position
+        // After ~5 frames (~80ms), check if we're stable at the new position
         if (pendingSeekFrameCount >= 5) {
-          const timeDrift = Math.abs(currentTimeMs - (pendingSeekTimeMs || 0));
-          // Still near the jumped position? It's a legitimate seek
-          if (timeDrift < jumpThreshold) {
-            // Legitimate seek confirmed - accept the new time
+          // Legitimate seek confirmed if:
+          // 1. We're still near the jumped-to position (not jumping around)
+          // 2. Or video is playing normally from this position (time advancing steadily)
+          const elapsedSinceSeek = currentTimeMs - (pendingSeekTimeMs || 0);
+          const isNearSeekPosition = Math.abs(elapsedSinceSeek) < 5000; // Within 5 seconds of seek target
+          const isPlayingFromSeek = elapsedSinceSeek >= 0 && elapsedSinceSeek < 5000; // Playing forward from seek
+
+          if (isNearSeekPosition || isPlayingFromSeek) {
+            // Legitimate seek confirmed - accept the new time and continue
             lastStableTimeMs = currentTimeMs;
             pendingSeekTimeMs = null;
             pendingSeekFrameCount = 0;
             updatePlayback(currentTimeMs);
           }
-          // Otherwise keep waiting for it to stabilize
+          // Otherwise keep waiting for stabilization (very rare)
         }
         animationFrameId = requestAnimationFrame(updateLoop);
         return;
@@ -1931,14 +1996,20 @@ function debounce<T extends (...args: unknown[]) => void>(
 function sendMuteNow(): void {
   if (isMuted) return; // Already muted
 
+  // For medium/low sensitivity, use window end time; for high, use cue end time
+  const unmuteTime = currentProfanityWindow?.endMs || currentProfanityCue?.endMs || 0;
+  const reasonInfo = currentProfanityWindow 
+    ? `window "${currentProfanityWindow.word}"` 
+    : (currentProfanityCue ? `cue ${currentProfanityCue.id}` : "unknown");
+
   console.log(
-    `[FFProfanity] MUTE: ${currentProfanityCue ? `cue ${currentProfanityCue.id}` : "unknown"} at ${videoElement?.currentTime?.toFixed(2)}s`,
+    `[FFProfanity] MUTE: ${reasonInfo} at ${videoElement?.currentTime?.toFixed(2)}s, unmute at ${unmuteTime}ms`,
   );
 
   browser.runtime.sendMessage({
     type: "muteNow",
     reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown",
-    expectedUnmuteAt: currentProfanityCue?.endMs || 0,
+    expectedUnmuteAt: unmuteTime,
   });
   isMuted = true;
 }
@@ -1988,11 +2059,13 @@ function updatePlayback(currentTimeMs: number): void {
   if (muteState.shouldMute && !isMuted) {
     // Entering a profanity zone
     currentProfanityCue = muteState.cue;
+    currentProfanityWindow = muteState.window; // For medium/low sensitivity
     sendMuteNow();
   } else if (!muteState.shouldMute && isMuted) {
     // Leaving the profanity zone
     sendUnmuteNow();
     currentProfanityCue = null;
+    currentProfanityWindow = null;
   }
 
   // Update overlay
