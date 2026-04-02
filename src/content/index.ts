@@ -1847,10 +1847,32 @@ function processCues(newCues: Cue[]): void {
   // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
   // If new cues have similar timing range to existing, replace instead of accumulate
   const firstCueSource = newCues[0]?.source || '';
-  const isSyncedSource = firstCueSource === 'fmovies' || 
+  const isSyncedSource = firstCueSource === 'fmovies' ||
                          firstCueSource === 'wyzie';
-  
-  if (isSyncedSource && cues.length > 0 && processedNewCues.length > 100) {
+  const isYouTubeSource = firstCueSource === 'youtube-intercepted' ||
+                          firstCueSource === 'youtube';
+
+  // YouTube live streams send stream-relative timestamps - replace cues entirely
+  // This handles both live streams and regular YouTube videos
+  if (isYouTubeSource && cues.length > 0) {
+    // For YouTube, replace cues when we get new timedtext responses
+    // This handles both live streams (stream-relative time) and VOD updates
+    const existingSource = cues[0]?.source || '';
+    if (existingSource === 'youtube-intercepted' || existingSource === 'youtube') {
+      // Same source - replace to handle live stream updates
+      console.log(
+        `[FFProfanity] Replacing ${cues.length} YouTube cues with ${processedNewCues.length} (live stream update)`
+      );
+      cues = processedNewCues;
+    } else {
+      // Different source - accumulate (e.g., switched from uploaded to auto-generated)
+      const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+      const uniqueNewCues = processedNewCues.filter(
+        (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+      );
+      cues = [...cues, ...uniqueNewCues];
+    }
+  } else if (isSyncedSource && cues.length > 0 && processedNewCues.length > 100) {
     // Check timing overlap: if ranges overlap significantly, this is likely a replacement
     const existingStart = cues[0]?.startMs || 0;
     const existingEnd = cues[cues.length - 1]?.endMs || 0;
@@ -1960,7 +1982,9 @@ function startMonitoring(): void {
   }
 
   // Detect YouTube ad video: duration=NaN or very short (< 30s) indicates ad
-  const isAdVideo = isNaN(videoElement.duration) || videoElement.readyState < 1;
+  // Live streams have duration=3600 (YouTube placeholder) or Infinity - NOT ads
+  const isLiveStream = videoElement.duration >= 3600 || !isFinite(videoElement.duration);
+  const isAdVideo = !isLiveStream && (isNaN(videoElement.duration) || videoElement.readyState < 1);
 
   // On YouTube, multiple video elements may exist - try to find the main content video
   if (isAdVideo) {

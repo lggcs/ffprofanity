@@ -453,9 +453,29 @@ export function youTubePageScript(): void {
 
     // Check if captions are already enabled (button has aria-pressed="true")
     const isEnabled = ccButton.getAttribute('aria-pressed') === 'true';
-    
+
     if (isEnabled) {
       log("Captions already enabled, timedtext should be loading");
+      
+      // For live streams, check if tracks exist - if not, captions may not be available
+      const ypr = (window as any).ytInitialPlayerResponse;
+      const captionTracks = ypr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (!captionTracks || captionTracks.length === 0) {
+        // Check if we've already tried to toggle captions for this stream
+        if ((window as any).__ffprofanity_caption_toggled) {
+          log("Live stream: No caption tracks available after toggle - stream may not have captions");
+          return;
+        }
+        // Toggle captions OFF then ON to trigger timedtext fetch
+        log("Live stream with no tracks - toggling captions to trigger timedtext");
+        (window as any).__ffprofanity_caption_toggled = true;
+        ccButton.click(); // OFF
+        setTimeout(() => {
+          ccButton.click(); // ON
+          setTimeout(() => extractFromInitialPlayerResponse(), 500);
+        }, 100);
+        return;
+      }
       return;
     }
 
@@ -467,17 +487,17 @@ export function youTubePageScript(): void {
     (window as any).__ffprofanity_caption_triggered = true;
 
     log("Clicking CC button to trigger caption loading");
-    
+
     // Simulate click to enable captions
     ccButton.click();
-    
+
     // Optionally click again to toggle back off if user doesn't want captions
     // But keep them on for a moment so timedtext loads
     setTimeout(() => {
       // Check if there are actual captions now
       const tracks = document.querySelectorAll('track');
       log("After CC click, found", tracks.length, "track elements");
-      
+
       // Re-extract to get any new tracks
       extractFromInitialPlayerResponse();
     }, 1000);
