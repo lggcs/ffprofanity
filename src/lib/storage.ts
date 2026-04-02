@@ -19,9 +19,9 @@ const DEFAULT_SETTINGS: Settings = {
   preferredLanguage: 'en',
   preferSDH: true,
   autoSelectTrack: true,
-  // Substitution settings
-  useSubstitutions: false,
-  substitutionCategory: 'silly',
+  // Substitution settings - default to funny monkey emojis
+  useSubstitutions: true,
+  substitutionCategory: 'monkeys',
   customSubstitutions: {},
   // Subtitle display settings
   showUpcomingCues: true,

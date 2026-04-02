@@ -116,8 +116,8 @@ async function loadSettings(): Promise<void> {
     sensitivitySelect.value = settings.sensitivity || "medium";
     showUpcomingCheckbox.checked = settings.showUpcomingCues !== false;
     showProfanityOnlyCheckbox.checked = settings.showProfanityOnly === true;
-    useSubstitutionsCheckbox.checked = settings.useSubstitutions === true;
-    substitutionCategorySelect.value = settings.substitutionCategory || "silly";
+    useSubstitutionsCheckbox.checked = settings.useSubstitutions !== false;  // Default to true
+    substitutionCategorySelect.value = settings.substitutionCategory || "monkeys";
     fontSizeSelect.value = settings.fontSize || "medium";
     positionSelect.value = settings.position || "bottom";
 

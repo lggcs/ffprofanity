@@ -805,8 +805,8 @@ export function createDetector(config?: Partial<ProfanityConfig>): ProfanityDete
     sensitivity: 'medium',
     useFuzzyMatching: false,
     useContextFiltering: true,
-    useSubstitutions: false,
-    substitutionCategory: 'silly',
+    useSubstitutions: true,
+    substitutionCategory: 'monkeys',
     ...restConfig,
     ...(configWordlist && configWordlist.length > 0 ? { wordlist: configWordlist } : {}),
   });

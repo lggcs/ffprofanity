@@ -125,8 +125,8 @@ async function loadSettings(): Promise<void> {
   wordlistTextarea.value = settings.wordlist.join('\n');
 
   // Set substitution settings
-  useSubstitutionsCheckbox.checked = settings.useSubstitutions || false;
-  categorySelect.value = settings.substitutionCategory || 'silly';
+  useSubstitutionsCheckbox.checked = settings.useSubstitutions ?? true;
+  categorySelect.value = settings.substitutionCategory || 'monkeys';
 
   // Set custom substitutions
   if (settings.customSubstitutions) {
