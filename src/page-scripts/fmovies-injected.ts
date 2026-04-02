@@ -80,6 +80,7 @@
 
   /**
    * Extract language from URL patterns
+   * NOTE: Duplicated from lib/language.ts - must be self-contained for injected script context
    */
   function extractLanguageFromUrl(url: string): string | null {
     const patterns = [

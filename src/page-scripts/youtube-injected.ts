@@ -221,47 +221,64 @@ export function youTubePageScript(): void {
     try {
       log("Fetching subtitle:", language, url.substring(0, 80) + "...");
 
-      const response = await fetch(url, {
-        credentials: "include",
-        headers: {
-          Accept: "text/vtt,application/vtt,text/plain,*/*",
-        },
-      });
+      // Add 10 second timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      if (!response.ok) {
-        console.warn(
-          "[FFProfanity-YouTube] Fetch failed:",
-          response.status,
-          response.statusText,
+      try {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: {
+            Accept: "text/vtt,application/vtt,text/plain,*/*",
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          console.warn(
+            "[FFProfanity-YouTube] Fetch failed:",
+            response.status,
+            response.statusText,
+          );
+          return null;
+        }
+
+        const text = await response.text();
+
+        if (!text || text.length < 10) {
+          console.warn("[FFProfanity-YouTube] Empty or too short response");
+          return null;
+        }
+
+        log("Fetched", text.length, "bytes for", language);
+
+        // Cache it
+        capturedTimedtext.set(url, text);
+
+        // Send the actual subtitle content back
+        window.postMessage(
+          {
+            type: "FFPROFANITY_SUBTITLE_CONTENT",
+            source: EXTRACTOR_ID,
+            language: language,
+            label: label,
+            content: text,
+          },
+          "*",
         );
+
+        return text;
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if ((fetchError as Error).name === 'AbortError') {
+          console.warn("[FFProfanity-YouTube] Fetch timed out after 10s:", url.substring(0, 60));
+        } else {
+          throw fetchError;
+        }
         return null;
       }
-
-      const text = await response.text();
-
-      if (!text || text.length < 10) {
-        console.warn("[FFProfanity-YouTube] Empty or too short response");
-        return null;
-      }
-
-      log("Fetched", text.length, "bytes for", language);
-
-      // Cache it
-      capturedTimedtext.set(url, text);
-
-      // Send the actual subtitle content back
-      window.postMessage(
-        {
-          type: "FFPROFANITY_SUBTITLE_CONTENT",
-          source: EXTRACTOR_ID,
-          language: language,
-          label: label,
-          content: text,
-        },
-        "*",
-      );
-
-      return text;
     } catch (error) {
       console.error("[FFProfanity-YouTube] Fetch error:", error);
       return null;

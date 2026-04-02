@@ -533,6 +533,7 @@ export class LookMovieExtractor extends BaseExtractor {
 
         // ========================================
         // Helper: Extract language from URL
+        // NOTE: Duplicated from lib/language.ts for injected script context
         // ========================================
         function extractLanguageFromUrl(url) {
           const patterns = [
@@ -550,6 +551,7 @@ export class LookMovieExtractor extends BaseExtractor {
 
         // ========================================
         // Helper: Language code to name
+        // NOTE: Duplicated from lib/language.ts for injected script context
         // ========================================
         function getLanguageName(code) {
           const names = {

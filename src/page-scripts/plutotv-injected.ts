@@ -85,11 +85,13 @@ export function plutoTVPageScript(): void {
     );
   }
 
+  // NOTE: extractLanguageFromUrl duplicated from lib/language.ts - must be self-contained for injected script context
   function extractLanguageFromUrl(url: string): string {
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
     return langMatch ? langMatch[1].toLowerCase() : "unknown";
   }
 
+  // NOTE: getLanguageName duplicated from lib/language.ts - must be self-contained for injected script context
   function getLanguageName(code: string): string {
     const languageNames: Record<string, string> = {
       en: "English",
@@ -131,36 +133,53 @@ export function plutoTVPageScript(): void {
         return await fetchHLSManifestContent(url, language, label);
       }
 
-      const response = await fetch(url, {
-        credentials: "include",
-        headers: { Accept: "text/vtt,application/vtt,text/plain" },
-      });
+      // Add 10 second timeout for fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      if (!response.ok) {
-        log("Fetch failed:", response.status, response.statusText);
+      try {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: { Accept: "text/vtt,application/vtt,text/plain" },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          log("Fetch failed:", response.status, response.statusText);
+          return null;
+        }
+
+        const text = await response.text();
+        if (!text || text.length < 10) {
+          log("Empty or too short response");
+          return null;
+        }
+
+        log("Fetched", text.length, "bytes for", language);
+
+        window.postMessage(
+          {
+            type: "FFPROFANITY_SUBTITLE_CONTENT",
+            source: "plutotv-page-context",
+            language: language,
+            label: label,
+            content: text,
+          },
+          "*",
+        );
+
+        return text;
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if ((fetchError as Error).name === 'AbortError') {
+          log("Fetch timed out after 10s:", url.substring(0, 60));
+        } else {
+          throw fetchError;
+        }
         return null;
       }
-
-      const text = await response.text();
-      if (!text || text.length < 10) {
-        log("Empty or too short response");
-        return null;
-      }
-
-      log("Fetched", text.length, "bytes for", language);
-
-      window.postMessage(
-        {
-          type: "FFPROFANITY_SUBTITLE_CONTENT",
-          source: "plutotv-page-context",
-          language: language,
-          label: label,
-          content: text,
-        },
-        "*",
-      );
-
-      return text;
     } catch (error) {
       log("Fetch error:", (error as Error).message || error);
       return null;
@@ -173,13 +192,30 @@ export function plutoTVPageScript(): void {
     label: string,
   ): Promise<string | null> {
     try {
-      const response = await fetch(manifestUrl, {
-        credentials: "include",
-        headers: {
-          Accept:
-            "application/vnd.apple.mpegurl,application/x-mpegurl,text/plain",
-        },
-      });
+      // Add 10 second timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      let response: Response;
+      try {
+        response = await fetch(manifestUrl, {
+          credentials: "include",
+          headers: {
+            Accept:
+              "application/vnd.apple.mpegurl,application/x-mpegurl,text/plain",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if ((fetchError as Error).name === 'AbortError') {
+          log("HLS manifest fetch timed out after 10s");
+        } else {
+          throw fetchError;
+        }
+        return null;
+      }
 
       if (!response.ok) {
         log("HLS manifest fetch failed:", response.status);

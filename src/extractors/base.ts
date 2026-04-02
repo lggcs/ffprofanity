@@ -4,6 +4,7 @@
  */
 
 import type { SubtitleTrack } from '../types';
+import { extractLanguageFromUrl, getLanguageName } from '../lib/language';
 
 export interface DetectedSubtitle {
   url: string;
@@ -71,62 +72,19 @@ export abstract class BaseExtractor implements SiteExtractor {
   }
 
   /**
-   * Extract language code from various formats
+   * Extract language code from URL or data object
+   * Delegates to shared language utilities
    */
   protected extractLanguage(url: string, data?: Record<string, unknown>): string {
-    // Check URL patterns
-    const urlPatterns = [
-      /[?&]lang=([a-z]{2,3})/i,
-      /\/([a-z]{2,3})\/[^/]+\.vtt$/i,
-      /\/([a-z]{2,3})_[a-f0-9]+\.vtt$/i,
-      /[_\-\.]([a-z]{2,3})\.vtt$/i,
-      /[_\-\.]([a-z]{2,3})\.srt$/i,
-    ];
-
-    for (const pattern of urlPatterns) {
-      const match = url.match(pattern);
-      if (match) return match[1].toLowerCase();
-    }
-
-    // Check data object
-    if (data) {
-      const langKeys = ['language', 'lang', 'code', 'lc'];
-      for (const key of langKeys) {
-        if (typeof data[key] === 'string') {
-          return (data[key] as string).toLowerCase().slice(0, 3);
-        }
-      }
-    }
-
-    return 'unknown';
+    return extractLanguageFromUrl(url, data);
   }
 
   /**
    * Convert language code to display name
+   * Delegates to shared language utilities
    */
   protected getLanguageName(code: string): string {
-    const names: Record<string, string> = {
-      en: 'English',
-      es: 'Spanish',
-      fr: 'French',
-      de: 'German',
-      it: 'Italian',
-      pt: 'Portuguese',
-      ru: 'Russian',
-      ja: 'Japanese',
-      ko: 'Korean',
-      zh: 'Chinese',
-      ar: 'Arabic',
-      hi: 'Hindi',
-      nl: 'Dutch',
-      pl: 'Polish',
-      sv: 'Swedish',
-      da: 'Danish',
-      fi: 'Finnish',
-      no: 'Norwegian',
-      tr: 'Turkish',
-    };
-    return names[code.toLowerCase()] || code.toUpperCase();
+    return getLanguageName(code);
   }
 
   /**

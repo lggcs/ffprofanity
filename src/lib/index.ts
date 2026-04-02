@@ -30,3 +30,9 @@ export {
   type SubstitutionMapping,
   type SubstitutionSettings,
 } from './substitutions';
+export {
+  LANGUAGE_NAMES,
+  extractLanguageFromUrl,
+  getLanguageName,
+  languageMatches,
+} from './language';

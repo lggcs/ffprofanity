@@ -9,6 +9,7 @@ import { YouTubeExtractor } from "./youtube";
 import { OneTwoThreeChillExtractor } from "./123chill";
 import { PlutoTVExtractor } from "./plutotv";
 import { FMoviesExtractor } from "./fmovies";
+import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
 const extractors: SiteExtractor[] = [
@@ -88,22 +89,9 @@ export function isSubtitleUrl(url: string): boolean {
 
 /**
  * Extract language from subtitle URL
+ * Re-exports from shared language utilities
  */
-export function extractLanguageFromUrl(url: string): string {
-  const patterns = [
-    /[?&]lang=([a-z]{2,3})/i,
-    /\/([a-z]{2,3})_[a-f0-9]+\.vtt$/i, // LookMovie format
-    /\/([a-z]{2,3})\/[^/]+\.(vtt|srt|ass)$/i,
-    /[_\-\.]([a-z]{2,3})\.(vtt|srt|ass)$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1].toLowerCase();
-  }
-
-  return "unknown";
-}
+export { extractLanguageFromUrlImpl as extractLanguageFromUrl };
 
 // Export everything
 export { SiteExtractor, DetectedSubtitle, BaseExtractor } from "./base";

@@ -52,7 +52,6 @@ let animationFrameId: ReturnType<typeof requestAnimationFrame> | null = null;
 
 // Live TV timing state - track previous firstCue to detect broadcast-absolute pattern
 let previousFirstCueMs: number | null = null;
-let lastCueId: number | null = null;
 let currentProfanityCue: Cue | null = null; // Track current profanity cue for mute state
 let currentProfanityWindow: ProfanityWindow | null = null; // Track current profanity window for medium/low sensitivity
 let playbackRate: number = 1.0; // Track playback speed
@@ -64,13 +63,11 @@ let pendingSeekTimeMs: number | null = null;
 let pendingSeekFrameCount: number = 0;
 let lastKnownTimeMs: number = 0; // Last known good time from display element
 let lastKnownTimeTimestamp: number = 0; // When we last read a valid time (for estimation)
-let timeEstimateOffset: number = 0; // Offset between display time and video.currentTime (for calibration)
 
 // Reference to time display element (for sites like fmovies where video.currentTime is unreliable)
 let timeDisplayElement: HTMLElement | null = null;
 
 // Debouncing
-let muteDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -218,6 +215,7 @@ function injectApiInterceptor(): void {
       }
 
       // Generic helper: Extract language from URL
+      // NOTE: Duplicated from lib/language.ts - must be self-contained for injected script context
       function extractLanguageFromUrl(url) {
         const patterns = [
           /[?&]lang=([a-z]{2,3})/i,
@@ -233,6 +231,7 @@ function injectApiInterceptor(): void {
       }
 
       // Generic helper: Language code to name
+      // NOTE: Duplicated from lib/language.ts - must be self-contained for injected script context
       function getLanguageName(code) {
         const names = {
           en: 'English', es: 'Spanish', fr: 'French', de: 'German',
@@ -1045,7 +1044,11 @@ function showNotification(
   );
   if (changeBtn) {
     changeBtn.addEventListener("click", () => {
-      browser.runtime.sendMessage({ type: "openTrackSelector" });
+      try {
+        browser.runtime.sendMessage({ type: "openTrackSelector" });
+      } catch {
+        // Context invalidated or background not ready
+      }
     });
   }
 }
@@ -2182,12 +2185,16 @@ function sendMuteNow(): void {
     `[FFProfanity] MUTE: ${reasonInfo} at ${videoElement?.currentTime?.toFixed(2)}s, unmute at ${unmuteTime}ms`,
   );
 
-  browser.runtime.sendMessage({
-    type: "muteNow",
-    reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown",
-    expectedUnmuteAt: unmuteTime,
-  });
-  isMuted = true;
+  try {
+    browser.runtime.sendMessage({
+      type: "muteNow",
+      reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown",
+      expectedUnmuteAt: unmuteTime,
+    });
+    isMuted = true;
+  } catch {
+    console.warn("[FFProfanity] Failed to send mute message - background not ready");
+  }
 }
 
 /**
@@ -2200,10 +2207,14 @@ function sendUnmuteNow(): void {
     `[FFProfanity] UNMUTE at ${videoElement?.currentTime?.toFixed(2)}s`,
   );
 
-  browser.runtime.sendMessage({
-    type: "unmuteNow",
-  });
-  isMuted = false;
+  try {
+    browser.runtime.sendMessage({
+      type: "unmuteNow",
+    });
+    isMuted = false;
+  } catch {
+    console.warn("[FFProfanity] Failed to send unmute message - background not ready");
+  }
 }
 
 /**
@@ -2246,9 +2257,11 @@ function updatePlayback(currentTimeMs: number): void {
 
   // Update overlay
   if (currentCue) {
-    const displayText = currentCue.hasProfanity
+    // Sanitize text to prevent XSS - both censoredText and text need sanitization
+    const rawText = currentCue.hasProfanity
       ? currentCue.censoredText
-      : sanitizeText(currentCue.text);
+      : currentCue.text;
+    const displayText = sanitizeText(rawText);
 
     currentCueEl.textContent = displayText;
     currentCueEl.style.display = "block";
@@ -2269,7 +2282,9 @@ function updatePlayback(currentTimeMs: number): void {
         const previews = nextCues
           .map((c) => {
             const time = formatTime(c.startMs);
-            const text = c.hasProfanity ? c.censoredText : sanitizeText(c.text);
+            // Sanitize text to prevent XSS - censoredText from detector is not HTML-escaped
+            const rawText = c.hasProfanity ? c.censoredText : c.text;
+            const text = sanitizeText(rawText);
             return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}</div>`;
           })
           .join("");
