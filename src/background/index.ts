@@ -548,6 +548,24 @@ async function injectPageScriptForUrl(
     }
   }
 
+  // fmovies injection - bypasses CSP by using MAIN world
+  if (/fmovies\.[a-z]+|fmovie\.[a-z]+/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/fmovies-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      console.log(`[FFProfanity] Injected fmovies script into tab ${tabId}`);
+      return true;
+    } catch (error) {
+      console.error(`[FFProfanity] Failed to inject fmovies script:`, error);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
   return false;
 }
 

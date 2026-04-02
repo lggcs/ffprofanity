@@ -20,6 +20,10 @@ export default defineConfig({
           __dirname,
           "src/page-scripts/youtube-injected.ts",
         ),
+        "page-scripts/fmovies": resolve(
+          __dirname,
+          "src/page-scripts/fmovies-injected.ts",
+        ),
       },
       output: {
         entryFileNames: (chunkInfo) => {
