@@ -140,12 +140,13 @@ function createCue(
   endMs: number,
   text: string,
 ): Cue {
+  const cleanedText = cleanSubtitleText(text);
   return {
     id,
     startMs,
     endMs,
-    text,
-    censoredText: text,
+    text: cleanedText,
+    censoredText: cleanedText,
     hasProfanity: false,
     profanityScore: 0,
     profanityMatches: [],
@@ -547,6 +548,44 @@ export function parseYouTubeJSON3(content: string): Cue[] {
   }
 
   return cues;
+}
+
+/**
+ * Clean subtitle text by decoding HTML entities and stripping formatting tags
+ * Handles double-encoded entities like &amp;lt; -> &lt; -> <
+ */
+export function cleanSubtitleText(text: string): string {
+  let result = text;
+
+  // Decode HTML entities multiple times to handle double/triple encoding
+  // e.g., &amp;lt; -> &lt; -> <
+  for (let i = 0; i < 3; i++) {
+    const prev = result;
+    const div = document.createElement("div");
+    div.innerHTML = result;
+    result = div.textContent || result;
+
+    // If no change, stop decoding
+    if (result === prev) break;
+  }
+
+  // Strip HTML/VTT formatting tags
+  result = result.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*[^>]*>/gi, '');
+  result = result.replace(/<[^>]*\/>/gi, '');
+
+  // Strip VTT voice tags: <v Speaker>
+  result = result.replace(/<v\s+[^>]*>/gi, '');
+
+  // Strip VTT class tags: <c.classname>
+  result = result.replace(/<c\.[^>]*>/gi, '');
+
+  // Strip any remaining angle bracket content (malformed tags)
+  result = result.replace(/<[^>]*>/g, '');
+
+  // Clean up whitespace
+  result = result.replace(/\s+/g, ' ').trim();
+
+  return result;
 }
 
 /**

@@ -485,7 +485,11 @@ function handleInterceptedMessage(event: MessageEvent): void {
 
   // Add all tracks at once (this also saves to storage)
   if (tracks.length > 0) {
-    addDetectedTracks(tracks);
+    // For user-initiated subtitle changes, force selection to update
+    const forceSelection = source.includes('xhr-subtitle') ||
+                          source.includes('user-subtitle') ||
+                          source.includes('subtitle-selected');
+    addDetectedTracks(tracks, forceSelection);
   }
 
   // Hide native subtitles for streaming sites that show their own overlay
@@ -891,8 +895,10 @@ async function scanForTracks(): Promise<void> {
 
 /**
  * Add detected tracks and auto-select best one
+ * @param tracks - Array of subtitle tracks to add
+ * @param forceSelection - If true, switch to the new track even if one is already loaded
  */
-function addDetectedTracks(tracks: SubtitleTrack[]): void {
+function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): void {
   // Filter out duplicates
   const newTracks = tracks.filter(
     (track) =>
@@ -906,7 +912,16 @@ function addDetectedTracks(tracks: SubtitleTrack[]): void {
   // Note: tracks are in-memory only - not persisted
 
   // If no current track, auto-select best one
-  if (!currentTrack && detectedTracks.length > 0) {
+  // OR if forceSelection is true (user changed CC), switch to the new track
+  if (forceSelection && newTracks.length > 0) {
+    // User explicitly selected a new track - switch to it
+    const selection = selectBestTrack(newTracks, settings);
+    if (selection.track) {
+      console.log(`[FFProfanity] User changed subtitle, switching to: ${selection.track.label}`);
+      selectTrack(selection.track);
+      showNotification("success", "Subtitle updated", true);
+    }
+  } else if (!currentTrack && detectedTracks.length > 0) {
     const selection = selectBestTrack(detectedTracks, settings);
 
     if (selection.track && selection.autoSelected) {

@@ -566,6 +566,24 @@ async function injectPageScriptForUrl(
     }
   }
 
+  // LookMovie injection - bypasses CSP by using MAIN world
+  if (/lookmovie\d*\.to|lookmovie\.[a-z]+|lookmovie\d*\.[a-z]+/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/lookmovie-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      console.log(`[FFProfanity] Injected LookMovie script into tab ${tabId}`);
+      return true;
+    } catch (error) {
+      console.error(`[FFProfanity] Failed to inject LookMovie script:`, error);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
   return false;
 }
 

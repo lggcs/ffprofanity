@@ -35,6 +35,7 @@ echo "Bundling page-scripts..."
 npm exec -- esbuild src/page-scripts/plutotv-injected.ts --bundle --outfile=dist/page-scripts/plutotv-injected.js --format=iife --platform=browser --target=firefox109
 npm exec -- esbuild src/page-scripts/youtube-injected.ts --bundle --outfile=dist/page-scripts/youtube-injected.js --format=iife --platform=browser --target=firefox109
 npm exec -- esbuild src/page-scripts/fmovies-injected.ts --bundle --outfile=dist/page-scripts/fmovies-injected.js --format=iife --platform=browser --target=firefox109
+npm exec -- esbuild src/page-scripts/lookmovie-injected.ts --bundle --outfile=dist/page-scripts/lookmovie-injected.js --format=iife --platform=browser --target=firefox109
 
 # Copy HTML files
 echo "Copying HTML files..."
