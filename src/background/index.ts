@@ -250,25 +250,28 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
   if (!message || typeof message !== "object") return;
 
   const msg = message as Record<string, unknown>;
-  const tabId = sender.tab?.id;
 
-  if (!tabId) return;
+  // Get tabId from sender (for content script messages) or from message (for popup messages)
+  const tabId = sender.tab?.id || (msg.tabId as number | undefined);
 
-  console.log(`Received message from tab ${tabId}:`, msg.type);
+  console.log(`Received message from ${sender.tab ? `tab ${tabId}` : 'popup'}:`, msg.type);
 
   switch (msg.type) {
     case "muteNow": {
+      if (!tabId) return;
       const muteMsg = message as MuteNowMessage;
       muteTab(tabId, muteMsg.reasonId, muteMsg.expectedUnmuteAt);
       break;
     }
 
     case "unmuteNow": {
+      if (!tabId) return;
       unmuteTab(tabId, "unmute-request");
       break;
     }
 
     case "getStatus": {
+      if (!tabId) return;
       const state = muteStates.get(tabId);
       return Promise.resolve({
         type: "status",
@@ -279,6 +282,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
 
     case "getAggregatedStatus": {
       // Popup requests aggregated status from all frames
+      if (!tabId) return;
       return getAggregatedStatus(tabId);
     }
 
