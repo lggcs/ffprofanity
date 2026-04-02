@@ -104,6 +104,9 @@ export class LookMovieExtractor extends BaseExtractor {
             source: source,
             subtitles: subs
           }, '*');
+          
+          // Hide native subtitles after capturing (prevents double display)
+          setTimeout(() => hideNativeSubtitles(), 500);
         }
 
         // ========================================
@@ -622,6 +625,222 @@ export class LookMovieExtractor extends BaseExtractor {
         }
 
         // ========================================
+        // Auto-click CC button to trigger subtitle loading
+        // VideoJS lazy-loads subtitles until user clicks CC
+        // ========================================
+        function tryEnableCaptions() {
+          // VideoJS subtitle button selectors
+          const ccSelectors = [
+            '.vjs-subs-caps-button',
+            '.vjs-captions-button',
+            '.vjs-subtitles-button',
+            'button[class*="caption"]',
+            'button[aria-label*="subtitle"]',
+            'button[aria-label*="caption"]'
+          ];
+
+          for (const selector of ccSelectors) {
+            const ccButton = document.querySelector(selector) as HTMLButtonElement;
+            if (ccButton) {
+              // Check if already enabled
+              const isPressed = ccButton.getAttribute('aria-pressed') === 'true' ||
+                               ccButton.classList.contains('vjs-enabled') ||
+                               ccButton.classList.contains('vjs-playing');
+              
+              if (!isPressed) {
+                // Check if we've already tried
+                if ((window as any).__ffprofanity_lm_cc_clicked) {
+                  log('CC button already clicked');
+                  return;
+                }
+                (window as any).__ffprofanity_lm_cc_clicked = true;
+
+                log('Clicking CC button to enable captions');
+                ccButton.click();
+                
+                // Re-check after click
+                setTimeout(() => checkAndSendTracks('lookmovie.cc-auto-click'), 500);
+                setTimeout(() => checkAndSendTracks('lookmovie.cc-auto-click-delay'), 2000);
+                
+                // After clicking CC, try to select "English 1" or first English option
+                setTimeout(() => selectEnglishSubtitle(), 300);
+                return;
+              } else {
+                log('Captions already enabled');
+                // Still try to select English subtitle if not already selected
+                setTimeout(() => selectEnglishSubtitle(), 300);
+                return;
+              }
+            }
+          }
+          log('No CC button found');
+        }
+
+        // ========================================
+        // Select English subtitle from language menu
+        // LookMovie has: English 1, English 2, English 3 - prefer "English 1"
+        // ========================================
+        function selectEnglishSubtitle() {
+          // Check if already showing English
+          const showingItem = document.querySelector('.vjs-subtitles-language-item.showing');
+          if (showingItem && showingItem.textContent?.includes('English')) {
+            log('English subtitle already selected:', showingItem.textContent?.trim());
+            // Hide native subtitles after capturing
+            setTimeout(() => hideNativeSubtitles(), 500);
+            return;
+          }
+
+          // Find "English 1" or first English option
+          const items = document.querySelectorAll('.vjs-subtitles-language-item');
+          let targetItem: Element | null = null;
+
+          for (const item of items) {
+            const text = item.textContent?.trim() || '';
+            if (text === 'English 1') {
+              targetItem = item;
+              break; // Exact match takes priority
+            } else if (!targetItem && text.startsWith('English')) {
+              targetItem = item;
+            }
+          }
+
+          if (targetItem && !(targetItem.classList.contains('showing'))) {
+            log('Selecting subtitle:', targetItem.textContent?.trim());
+            (targetItem as HTMLElement).click();
+            
+            // Trigger track detection after selection, then hide native subtitles
+            setTimeout(() => checkAndSendTracks('lookmovie.subtitle-selected'), 500);
+            setTimeout(() => checkAndSendTracks('lookmovie.subtitle-selected-delay'), 2000);
+            setTimeout(() => hideNativeSubtitles(), 1000);
+          } else if (!targetItem) {
+            log('No English subtitle option found in menu');
+          }
+        }
+
+        // ========================================
+        // Turn off native subtitles by clicking "Off" in menu
+        // LookMovie uses a custom subtitle overlay, not VideoJS native tracks
+        // We need to: 1) Open CC menu, 2) Find "Off" button, 3) Click it
+        // ========================================
+        function hideNativeSubtitles() {
+          log('hideNativeSubtitles: attempting to disable native subtitles');
+          
+          // LookMovie has a custom subtitle menu structure:
+          // <button class="vjs-subtitles-language-toggle">...</button>
+          // <ul class="vjs-subtitles-language-items">
+          //   <li class="vjs-subtitles-language-item"><span>Off</span></li>
+          //   <li class="vjs-subtitles-language-item showing"><span>English 1</span></li>
+          // </ul>
+          
+          // First, find the "Off" button directly (might already exist)
+          const offButton = findOffButton();
+          if (offButton) {
+            log('hideNativeSubtitles: Found "Off" button directly, clicking');
+            offButton.click();
+            return true;
+          }
+          
+          // Menu might be closed, need to open it first
+          const ccButton = findCCButton();
+          if (ccButton) {
+            log('hideNativeSubtitles: Opening CC menu to access "Off" button');
+            ccButton.click();
+            
+            // Wait for menu to render, then find and click Off
+            setTimeout(() => {
+              const offBtn = findOffButton();
+              if (offBtn) {
+                log('hideNativeSubtitles: Found "Off" button after opening menu, clicking');
+                offBtn.click();
+              } else {
+                log('hideNativeSubtitles: Still no "Off" button found after opening menu');
+              }
+            }, 200);
+            return true;
+          }
+          
+          log('hideNativeSubtitles: No CC button or Off button found');
+          return false;
+        }
+        
+        // ========================================
+        // Find the "Off" button in the subtitle menu
+        // ========================================
+        function findOffButton(): HTMLElement | null {
+          // Look for "Off" text in menu items
+          const items = document.querySelectorAll('.vjs-subtitles-language-item, .vjs-menu-item');
+          for (const item of items) {
+            const text = item.textContent?.trim();
+            if (text === 'Off') {
+              return item as HTMLElement;
+            }
+          }
+          
+          // Also check for buttons with "Off" text
+          const buttons = document.querySelectorAll('button');
+          for (const btn of buttons) {
+            const text = btn.textContent?.trim();
+            if (text === 'Off') {
+              return btn as HTMLElement;
+            }
+          }
+          
+          return null;
+        }
+        
+        // ========================================
+        // Find the CC/subtitles toggle button
+        // ========================================
+        function findCCButton(): HTMLElement | null {
+          const selectors = [
+            '.vjs-subtitles-language-toggle',
+            '.vjs-subs-caps-button',
+            '.vjs-captions-button',
+            '.vjs-subtitles-button',
+            'button[aria-label*="caption"]',
+            'button[aria-label*="subtitle"]',
+            'button[class*="subtitle"]'
+          ];
+          
+          for (const selector of selectors) {
+            const btn = document.querySelector(selector) as HTMLElement;
+            if (btn) {
+              return btn;
+            }
+          }
+          
+          return null;
+        }
+
+        // ========================================
+        // Listen for user subtitle selection changes
+        // When user clicks a different subtitle, we should use that one
+        // ========================================
+        function setupSubtitleChangeListener() {
+          document.addEventListener('click', function(e) {
+            const target = e.target as HTMLElement;
+            
+            // Check if clicking on a subtitle language item
+            const subtitleItem = target.closest('.vjs-subtitles-language-item');
+            if (subtitleItem && !subtitleItem.classList.contains('showing')) {
+              const selectedText = subtitleItem.textContent?.trim();
+              log('User selected subtitle:', selectedText);
+              
+              // Clear the "already clicked" flag so we can process the new selection
+              (window as any).__ffprofanity_lm_cc_clicked = false;
+              
+              // Trigger subtitle detection for the new track
+              // Wait a bit for the player to switch tracks
+              setTimeout(() => {
+                checkAndSendTracks('lookmovie.user-subtitle-change');
+                // Then turn off native subtitles again
+                setTimeout(() => hideNativeSubtitles(), 300);
+              }, 500);
+            }
+          }, true);
+        }
+
+        // ========================================
         // Watch for video player changes (ads -> main content)
         // LookMovie plays 10-second ads before the main video
         // ========================================
@@ -676,7 +895,21 @@ export class LookMovieExtractor extends BaseExtractor {
           // Setup watchers
           watchForVideoJS();
           setupCCButtonDetection();
+          setupSubtitleChangeListener();
           watchForPlayerTransition();
+
+          // Listen for content script message to hide native subtitles
+          window.addEventListener('message', (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === 'FFPROFANITY_HIDE_NATIVE_SUBTITLES') {
+              log('Received HIDE_NATIVE_SUBTITLES message');
+              // Try multiple times as the menu may need to be opened first
+              hideNativeSubtitles();
+              setTimeout(() => hideNativeSubtitles(), 500);
+              setTimeout(() => hideNativeSubtitles(), 1500);
+              setTimeout(() => hideNativeSubtitles(), 3000);
+            }
+          });
 
           // Setup movie_storage watcher (polling + property intercept)
           if (window.movie_storage) {
@@ -712,6 +945,11 @@ export class LookMovieExtractor extends BaseExtractor {
           setTimeout(() => checkAndSendTracks('lookmovie.init-10000'), 10000);
           setTimeout(() => checkAndSendTracks('lookmovie.init-15000'), 15000);
           setTimeout(() => checkAndSendTracks('lookmovie.init-20000'), 20000);
+
+          // Try to auto-enable captions (VideoJS lazy-loads subtitles)
+          setTimeout(tryEnableCaptions, 2000);
+          setTimeout(tryEnableCaptions, 5000);
+          setTimeout(tryEnableCaptions, 10000);
 
           log('Extractor ready');
         }

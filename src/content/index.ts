@@ -488,6 +488,152 @@ function handleInterceptedMessage(event: MessageEvent): void {
   if (tracks.length > 0) {
     addDetectedTracks(tracks);
   }
+
+  // Hide native subtitles for streaming sites that show their own overlay
+  // LookMovie uses a custom subtitle display element that we need to hide
+  hideNativeSubtitlesForSite(source);
+}
+
+/**
+ * Hide native subtitle overlays for specific streaming sites
+ * Each site has its own subtitle display element that needs to be hidden
+ */
+function hideNativeSubtitlesForSite(source: string): void {
+  // Detect site from source or hostname
+  const hostname = window.location.hostname.toLowerCase();
+  let site: string | undefined;
+  
+  // Map hostname patterns to site identifiers
+  if (hostname.includes('lookmovie')) {
+    site = 'lookmovie';
+  } else if (hostname.includes('fmovies')) {
+    site = 'fmovies';
+  } else if (hostname.includes('123chill')) {
+    site = '123chill';
+  } else if (hostname.includes('youtube')) {
+    site = 'youtube';
+  } else {
+    // Fall back to source-based detection
+    site = source.split('.')[0];
+  }
+  
+  console.log(`[FFProfanity] Hiding native subtitles for ${source} (site: ${site}, host: ${hostname})`);
+  
+  // Try JavaScript API first (for sites using Video.js)
+  // In Firefox, use wrappedJSObject to access page script's window
+  try {
+    const pageWindow = (window as any).wrappedJSObject || window;
+    
+    // LookMovie stores player in window.videoJS
+    const videoJS = pageWindow.videoJS;
+    if (videoJS && typeof videoJS.textTracks === 'function') {
+      const tracks = videoJS.textTracks();
+      if (tracks && tracks.length > 0) {
+        console.log(`[FFProfanity] Found ${tracks.length} Video.js text tracks`);
+        for (let i = 0; i < tracks.length; i++) {
+          const track = tracks[i];
+          if (track.kind === 'subtitles' || track.kind === 'captions') {
+            if (track.mode !== 'disabled') {
+              console.log(`[FFProfanity] Disabling track: ${track.label || track.language}, mode was: ${track.mode}`);
+              track.mode = 'disabled';
+            }
+          }
+        }
+      }
+    }
+    
+    // Check for videojs global players registry
+    if (pageWindow.videojs && pageWindow.videojs.players) {
+      const players = pageWindow.videojs.players;
+      for (const playerId in players) {
+        const player = players[playerId];
+        if (player && typeof player.textTracks === 'function') {
+          const tracks = player.textTracks();
+          for (let i = 0; i < tracks.length; i++) {
+            const track = tracks[i];
+            if (track.kind === 'subtitles' || track.kind === 'captions') {
+              if (track.mode !== 'disabled') {
+                console.log(`[FFProfanity] Disabling videojs.players track: ${track.label || track.language}`);
+                track.mode = 'disabled';
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[FFProfanity] Error disabling Video.js tracks:', e);
+  }
+  
+  // Hide subtitle display container via CSS
+  const hideSelectors: Record<string, string[]> = {
+    'lookmovie': [
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
+      '.video-js .vjs-text-track-display'
+    ],
+    'lookmovie.hls': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'lookmovie-api': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'lookmovie.xhr-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'lookmovie.fetch-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'lookmovie.fetch-hls': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'fmovies': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    '123chill': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    'youtube': [
+      '.ytp-caption-segment',
+      '.caption-window',
+      '.ytp-caption-window-container',
+      '.ytp-caption-window-rollup',
+      '.caption-visual-line'
+    ],
+    'youtube-intercepted': [
+      '.ytp-caption-segment',
+      '.caption-window',
+      '.ytp-caption-window-container',
+      '.ytp-caption-window-rollup',
+      '.caption-visual-line'
+    ],
+  };
+
+  const selectors = hideSelectors[site] || hideSelectors[site.split('.')[0]];
+
+  if (selectors) {
+    // Inject CSS to hide native subtitles
+    const styleId = 'ffprofanity-hide-native-subtitles';
+    let style = document.getElementById(styleId) as HTMLStyleElement;
+    
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    
+    // Add CSS rules with visibility:hidden instead of display:none (display:none can break layout)
+    const css = selectors.map(s => `${s} { visibility: hidden !important; opacity: 0 !important; }`).join('\n');
+    style.textContent = css;
+    
+    console.log(`[FFProfanity] Injected CSS to hide native subtitles`);
+  }
+  
+  // Schedule another attempt in case player loads later
+  setTimeout(() => {
+    try {
+      const pageWindow = (window as any).wrappedJSObject || window;
+      const videoJS = pageWindow.videoJS;
+      if (videoJS && typeof videoJS.textTracks === 'function') {
+        const tracks = videoJS.textTracks();
+        for (let i = 0; i < tracks.length; i++) {
+          const track = tracks[i];
+          if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+            console.log(`[FFProfanity] Delayed disable of track: ${track.label || track.language}`);
+            track.mode = 'disabled';
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[FFProfanity] Error in delayed track disable:', e);
+    }
+  }, 3000);
 }
 
 /**
@@ -502,6 +648,9 @@ function handleSubtitleContent(
   segmentLoadTimeMs?: number,
   streamType?: string,
 ): void {
+  // Hide native subtitles on streaming sites (prevents double display)
+  hideNativeSubtitlesForSite(source);
+
   // Debug: Log first 500 chars to diagnose format issues
   console.log(
     `[FFProfanity] Parsing subtitle content (${content?.length || 0} bytes). First 500 chars:`,
@@ -1596,6 +1745,9 @@ async function handleSubtitleUpload(
   content: string,
   filename?: string,
 ): Promise<void> {
+  // Hide native subtitles on streaming sites (prevents double display)
+  hideNativeSubtitlesForSite('user-upload');
+
   console.log(
     `[FFProfanity] Parsing subtitle content (${content.length} bytes)`,
   );
