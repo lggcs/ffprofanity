@@ -905,21 +905,32 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
       !detectedTracks.some((t) => t.url === track.url || t.id === track.id),
   );
 
-  if (newTracks.length === 0) return;
+  // Add new tracks to the list
+  if (newTracks.length > 0) {
+    detectedTracks.push(...newTracks);
+  }
 
-  detectedTracks.push(...newTracks);
-
-  // Note: tracks are in-memory only - not persisted
-
-  // If no current track, auto-select best one
-  // OR if forceSelection is true (user changed CC), switch to the new track
-  if (forceSelection && newTracks.length > 0) {
+  // Handle track selection
+  if (forceSelection && tracks.length > 0) {
     // User explicitly selected a new track - switch to it
-    const selection = selectBestTrack(newTracks, settings);
-    if (selection.track) {
-      console.log(`[FFProfanity] User changed subtitle, switching to: ${selection.track.label}`);
-      selectTrack(selection.track);
+    // Find the track from our list (works for both new and existing tracks)
+    const trackToSelect = tracks[0];
+    const existingTrack = detectedTracks.find(
+      (t) => t.url === trackToSelect.url || t.id === trackToSelect.id,
+    );
+
+    if (existingTrack) {
+      console.log(`[FFProfanity] User changed subtitle, switching to: ${existingTrack.label}`);
+      selectTrack(existingTrack);
       showNotification("success", "Subtitle updated", true);
+    } else if (newTracks.length > 0) {
+      // Track not in detectedTracks yet (shouldn't happen but fallback)
+      const selection = selectBestTrack(newTracks, settings);
+      if (selection.track) {
+        console.log(`[FFProfanity] User changed subtitle, switching to: ${selection.track.label}`);
+        selectTrack(selection.track);
+        showNotification("success", "Subtitle updated", true);
+      }
     }
   } else if (!currentTrack && detectedTracks.length > 0) {
     const selection = selectBestTrack(detectedTracks, settings);
