@@ -166,6 +166,7 @@ export function plutoTVPageScript(): void {
             language: language,
             label: label,
             content: text,
+            url: url,
           },
           "*",
         );
@@ -409,6 +410,7 @@ export function plutoTVPageScript(): void {
                 language: lang,
                 label: label,
                 content: content,
+                url: reqUrl,
                 segmentLoadTime: segmentLoadTime,
                 streamType: streamType,
               },
@@ -506,6 +508,7 @@ export function plutoTVPageScript(): void {
                   language: lang,
                   label: label,
                   content: content,
+                  url: url,
                   segmentLoadTime: segmentLoadTime,
                   streamType: streamType,
                 },
@@ -522,10 +525,72 @@ export function plutoTVPageScript(): void {
     };
   }
 
+  function monitorTextTracks(): void {
+    log("Starting textTracks monitor");
+    
+    const trackedCues = new Set<string>();
+    
+    setInterval(() => {
+      try {
+        const videoEl = document.querySelector('video');
+        if (!videoEl) return;
+        
+        const textTracks = videoEl.textTracks;
+        if (!textTracks || textTracks.length === 0) return;
+        
+        for (let trackIdx = 0; trackIdx < textTracks.length; trackIdx++) {
+          const track = textTracks[trackIdx];
+          if (track.kind !== 'subtitles' && track.kind !== 'captions') continue;
+          if (track.mode !== 'showing' && track.mode !== 'hidden') continue;
+          if (!track.cues || track.cues.length === 0) continue;
+          
+          const cues = Array.from(track.cues);
+          for (const cue of cues) {
+            const cueId = `${cue.startTime}-${cue.endTime}-${cue.text.substring(0, 20)}`;
+            if (trackedCues.has(cueId)) continue;
+            trackedCues.add(cueId);
+            
+            // Convert VTTCue to WebVTT format for our parser
+            // These cues have already been adjusted by HLS.js for correct timing
+            const startHrs = Math.floor(cue.startTime / 3600);
+            const startMins = Math.floor((cue.startTime % 3600) / 60);
+            const startSecs = (cue.startTime % 60).toFixed(3);
+            const endHrs = Math.floor(cue.endTime / 3600);
+            const endMins = Math.floor((cue.endTime % 3600) / 60);
+            const endSecs = (cue.endTime % 60).toFixed(3);
+            
+            const vttCue = `${String(startHrs).padStart(2, '0')}:${String(startMins).padStart(2, '0')}:${startSecs} --> ${String(endHrs).padStart(2, '0')}:${String(endMins).padStart(2, '0')}:${endSecs}\n${cue.text}`;
+            
+            log("Captured cue from textTracks:", cue.startTime.toFixed(2), '-', cue.endTime.toFixed(2), cue.text.substring(0, 30));
+            
+            window.postMessage(
+              {
+                type: "FFPROFANITY_SUBTITLE_CUE",
+                source: "plutotv.texttracks",
+                language: track.language || 'en',
+                label: track.label || track.language || 'English',
+                cue: vttCue,
+                startTime: cue.startTime,
+                endTime: cue.endTime,
+                text: cue.text,
+              },
+              "*",
+            );
+          }
+        }
+      } catch (err) {
+        console.error('[PlutoTV] textTracks monitor error:', err);
+      }
+    }, 200); // Check 5 times per second
+    
+    log("textTracks monitor installed");
+  }
+
   function init(): void {
     log("PlutoTV extractor initialized via MAIN world injection");
     interceptXHR();
     interceptFetch();
+    monitorTextTracks();
     log("XHR and fetch interception installed");
   }
 

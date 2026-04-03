@@ -70,6 +70,72 @@ let timeDisplayElement: HTMLElement | null = null;
 // Debouncing
 let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
 
+// Track URLs that have been processed via intercepted content (avoid double-fetch)
+const processedContentUrls = new Set<string>();
+
+// Accumulate textTracks cues from HLS.js (these have correct timing)
+interface TextTracksCue {
+  type: string;
+  source: string;
+  language: string;
+  label: string;
+  cue: string;
+  startTime: number;
+  endTime: number;
+  text: string;
+}
+const textTracksCues: TextTracksCue[] = [];
+
+// Processing interval for textTracks cues (PlutoTV only)
+let textTracksProcessTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Process accumulated textTracks cues from HLS.js (PlutoTV only)
+ * These cues already have correct timing applied by HLS.js
+ */
+function processTextTracksCues(): void {
+  if (textTracksCues.length === 0) return;
+
+  // Take a snapshot and clear the accumulator
+  const pendingCues = [...textTracksCues];
+  textTracksCues.length = 0;
+
+  // Convert to our Cue format
+  const newCues: Cue[] = pendingCues.map((tc, idx) => {
+    const id = `texttrack-${Date.now()}-${idx}`;
+    return {
+      id,
+      startMs: Math.round(tc.startTime * 1000),
+      endMs: Math.round(tc.endTime * 1000),
+      text: tc.text,
+      source: 'plutotv-texttracks',
+    };
+  });
+
+  // Deduplicate against existing cues
+  const existingKeys = new Set(cues.map(c => `${c.startMs}:${c.text}`));
+  const uniqueCues = newCues.filter(c => !existingKeys.has(`${c.startMs}:${c.text}`));
+
+  if (uniqueCues.length === 0) return;
+
+  console.log(`[FFProfanity] Processing ${uniqueCues.length} textTracks cues from PlutoTV (HLS.js timed)`);
+
+  // Mark as synced source so VOD offset logic doesn't apply
+  processCues(uniqueCues);
+}
+
+/**
+ * Start the textTracks processing interval (call once during init)
+ */
+function startTextTracksProcessor(): void {
+  if (textTracksProcessTimer) return;
+
+  // Process accumulated textTracks cues every 500ms
+  textTracksProcessTimer = setInterval(() => {
+    processTextTracksCues();
+  }, 500);
+}
+
 /**
  * Initialize the content script
  */
@@ -123,6 +189,9 @@ async function init(): Promise<void> {
 
   // Inject script to intercept API responses on streaming sites
   injectApiInterceptor();
+
+  // Start the textTracks processor (for PlutoTV HLS.js timed cues)
+  startTextTracksProcessor();
 
   // Clear any old saved cues - user prefers per-session only
   await storage.clearCues();
@@ -380,9 +449,19 @@ function injectApiInterceptor(): void {
  * - FFPROFANITY_SUBTITLES_DETECTED: Track metadata (URL, language, label)
  * - FFPROFANITY_SUBTITLE_CONTENT: Actual subtitle content fetched in page context
  * - FFPROFANITY_SUBTITLE_CAPTURED: Content captured from intercepted network responses
+ * - FFPROFANITY_SUBTITLE_CUE: Individual cue from textTracks (timed by HLS.js)
  */
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
+
+  // Handle individual cues from textTracks (HLS.js timed cues)
+  if (event.data?.type === "FFPROFANITY_SUBTITLE_CUE") {
+    if (!videoElement) {
+      return; // No video element in this frame
+    }
+    textTracksCues.push(event.data);
+    return;
+  }
 
   // Handle subtitle content captured from network interception (YouTube timedtext)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
@@ -415,11 +494,26 @@ function handleInterceptedMessage(event: MessageEvent): void {
       console.log("[FFProfanity] Skipping subtitle content - no video element in this frame");
       return;
     }
-    const { content, language, label, source, segmentLoadTime, streamType } =
+    const { content, language, label, source, segmentLoadTime, streamType, url } =
       event.data;
+
+    // PlutoTV: Skip network-intercepted VTT content (wrong timing)
+    // We use textTracks cues instead (correct timing from HLS.js)
+    if (source && source.includes('plutotv')) {
+      console.log(
+        `[FFProfanity] Skipping PlutoTV network-intercepted content from ${source} (using textTracks instead)`
+      );
+      return;
+    }
+
     console.log(
       `[FFProfanity] Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`,
     );
+
+    // Track the URL so we don't double-fetch it when track metadata arrives
+    if (url) {
+      processedContentUrls.add(url);
+    }
 
     if (content && content.length > 10) {
       const segmentLoadTimeMs = segmentLoadTime
@@ -486,8 +580,8 @@ function handleInterceptedMessage(event: MessageEvent): void {
   // Add all tracks at once (this also saves to storage)
   if (tracks.length > 0) {
     // For user-initiated subtitle changes, force selection to update
-    const forceSelection = source.includes('xhr-subtitle') ||
-                          source.includes('user-subtitle') ||
+    // PlutoTV's automatic interception should NOT force selection (content comes via FFPROFANITY_SUBTITLE_CONTENT)
+    const forceSelection = source.includes('user-subtitle') ||
                           source.includes('subtitle-selected');
     addDetectedTracks(tracks, forceSelection);
   }
@@ -596,6 +690,12 @@ function hideNativeSubtitlesForSite(source: string): void {
       '.ytp-caption-window-rollup',
       '.caption-visual-line'
     ],
+    // PlutoTV uses standard video element with textTracks
+    'plutotv': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
+    'plutotv.xhr-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
+    'plutotv.xhr-intercepted': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
+    'plutotv.fetch-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
+    'plutotv.fetch-intercepted': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
   };
 
   const selectors = hideSelectors[site] || hideSelectors[site.split('.')[0]];
@@ -674,8 +774,9 @@ function handleSubtitleContent(
   let finalCues = rawResult.cues;
 
   // FMovies/subs from video.textTracks are already perfectly synced with the player
+  // plutotv-texttracks: cues from HLS.js textTracks already have correct timing
   // Skip any timing adjustments for these sources
-  const isSyncedSource = source === "fmovies" || source === "Wyzie" || source === "Video Track" || label === "Video Track";
+  const isSyncedSource = source === "fmovies" || source === "Wyzie" || source === "Video Track" || source === "plutotv-texttracks" || label === "Video Track";
   
   if (isSyncedSource) {
     // Trust the timestamps as-is - they're already in the video's timeline
@@ -786,12 +887,33 @@ function handleSubtitleContent(
         }
       }
     } else {
-      // VOD: Timestamps are already in movie timeline, use directly
-      // mtp is NOT a timeline offset - it's the HLS playlist position
+      // VOD: Timestamps are movie-relative in the VTT files
+      // After seeking, old segments from buffer may arrive - skip those that don't match current position
+      
+      const videoPosMs = videoElement ? Math.round(videoElement.currentTime * 1000) : 0;
+      const lastCueMs = rawResult.cues[rawResult.cues.length - 1]?.endMs || firstCueMs;
+      
+      // Check if segment is relevant to current playback
+      // A segment is relevant if its time range overlaps with current video position (±30s tolerance)
+      const toleranceMs = 30000;
+      const isSegmentRelevant = 
+        videoPosMs === 0 || // No video position yet, accept segment
+        (firstCueMs <= videoPosMs + toleranceMs && lastCueMs >= videoPosMs - toleranceMs);
+      
+      if (!isSegmentRelevant) {
+        // Segment is from a different part of the video (e.g., old buffer after seeking)
+        // Skip it to avoid polluting the cue list with out-of-range cues
+        console.log(
+          `[FFProfanity] VOD: Skipping out-of-range segment. ` +
+            `segment=${firstCueMs}-${lastCueMs}ms, videoPos=${videoPosMs}ms`
+        );
+        return;
+      }
+      
       if (rawResult.timestampMap) {
         console.log(
-          `[FFProfanity] VOD: Using movie timeline timestamps directly (no offset). ` +
-            `firstCue=${firstCueMs}ms, mtp=${segmentLoadTimeMs}ms (ignored)}`,
+          `[FFProfanity] VOD: Using movie timeline timestamps. ` +
+            `firstCue=${firstCueMs}ms, videoPos=${videoPosMs}ms`,
         );
       }
     }
@@ -824,9 +946,13 @@ function handleSubtitleContent(
 
   detectedTracks = [currentTrack];
 
-  console.log(
-    `[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${finalCues.length} cues)`,
-  );
+  // Reduce logging noise for streaming sources with frequent segment updates
+  const isStreamingSource = source.includes('plutotv') || source.includes('youtube');
+  if (!isStreamingSource || finalCues.length > 5) {
+    console.log(
+      `[FFProfanity] Loaded subtitle track: ${currentTrack.label} (${finalCues.length} cues)`,
+    );
+  }
 }
 
 /**
@@ -933,11 +1059,21 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
       }
     }
   } else if (!currentTrack && detectedTracks.length > 0) {
-    const selection = selectBestTrack(detectedTracks, settings);
+    // Skip auto-selection for HLS manifest sources - they'll send content separately
+    // PlutoTV sends both .m3u8 manifest AND .vtt segment content
+    // We should wait for the actual content via FFPROFANITY_SUBTITLE_CONTENT
+    const isHlsManifestSource = detectedTracks.some(t =>
+      t.source.includes('hls') ||
+      t.url?.includes('.m3u8')
+    );
 
-    if (selection.track && selection.autoSelected) {
-      selectTrack(selection.track);
-      showNotification("success", "", true);
+    if (!isHlsManifestSource) {
+      const selection = selectBestTrack(detectedTracks, settings);
+
+      if (selection.track && selection.autoSelected) {
+        selectTrack(selection.track);
+        showNotification("success", "", true);
+      }
     }
   }
 
@@ -964,6 +1100,15 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
 
   if (!track.url && !track.embedded) {
     console.warn("[FFProfanity] Track has no URL and is not embedded");
+    return;
+  }
+
+  // Skip fetching if content was already processed via intercepted content
+  // This prevents double-processing for sites like PlutoTV where both
+  // subtitle content AND track metadata are sent
+  if (track.url && processedContentUrls.has(track.url)) {
+    console.log(`[FFProfanity] Skipping fetch for ${track.url.substring(0, 60)} - already processed`);
+    currentTrack = track;
     return;
   }
 
@@ -1880,6 +2025,7 @@ function processCues(newCues: Cue[]): void {
                          firstCueSource === 'wyzie';
   const isYouTubeSource = firstCueSource === 'youtube-intercepted' ||
                           firstCueSource === 'youtube';
+  const isPlutoTVSource = firstCueSource.includes('plutotv');
 
   // YouTube live streams send stream-relative timestamps - replace cues entirely
   // This handles both live streams and regular YouTube videos
@@ -1900,6 +2046,20 @@ function processCues(newCues: Cue[]): void {
         (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
       );
       cues = [...cues, ...uniqueNewCues];
+    }
+  } else if (isPlutoTVSource) {
+    // PlutoTV: HLS segments with incremental cues
+    // Accumulate with deduplication, don't replace (VOD content builds up over time)
+    console.log(
+      `[FFProfanity] PlutoTV: accumulating ${processedNewCues.length} cues from ${firstCueSource}`
+    );
+    const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+    const uniqueNewCues = processedNewCues.filter(
+      (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+    );
+    if (uniqueNewCues.length > 0) {
+      cues = [...cues, ...uniqueNewCues];
+      cues.sort((a, b) => a.startMs - b.startMs);
     }
   } else if (isSyncedSource && cues.length > 0 && processedNewCues.length > 100) {
     // Check timing overlap: if ranges overlap significantly, this is likely a replacement
