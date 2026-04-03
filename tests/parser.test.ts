@@ -83,10 +83,11 @@ Second subtitle`;
 00:00:01,000 --> 00:00:04,000
 Line one
 Line two`;
-      
+
       const cues = parseSRT(content);
-      
-      expect(cues[0].text).toBe('Line one\nLine two');
+
+      // cleanSubtitleText converts newlines to spaces
+      expect(cues[0].text).toBe('Line one Line two');
     });
     
     it('should handle timestamps with period separator', () => {
@@ -194,10 +195,11 @@ ScriptType: v4.00+
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Line one\\NLine two`;
-      
+
       const cues = parseASS(content);
-      
-      expect(cues[0].text).toBe('Line one\nLine two');
+
+      // cleanSubtitleText converts newlines to spaces, so \N becomes space
+      expect(cues[0].text).toBe('Line one Line two');
     });
     
     it('should handle text with commas', () => {
@@ -238,15 +240,14 @@ Hello`);
     });
     
     it('should sanitize parsed text', () => {
-      // Test that sanitizeText function exists and works
+      // Test that HTML/script tags are stripped by cleanSubtitleText
       const content = `1
 00:00:01,000 --> 00:00:04,000
 <script>alert('xss')</script>`;
-      
+
       const result = parseSubtitle(content);
-      expect(result.cues[0].text).toContain('<script>');
-      
-      // Note: sanitizeText requires DOM environment, tested in integration tests
+      // cleanSubtitleText strips HTML tags, leaving just the content
+      expect(result.cues[0].text).toBe("alert('xss')");
     });
   });
   

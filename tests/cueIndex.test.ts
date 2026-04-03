@@ -37,10 +37,11 @@ describe('CueIndex profanity window search', () => {
     // Test times around the window
     const window = windows[0];
     
-    // Before window - should NOT mute
-    const beforeWindow = index.findProfanityWindow(window.startMs - 100, 0);
+    // Before window - outside the MUTE_ADVANCE_MS buffer (500ms before window start)
+    // The implementation uses a 500ms advance buffer, so we need to be >500ms before startMs
+    const beforeWindow = index.findProfanityWindow(window.startMs - 600, 0);
     expect(beforeWindow).toBeNull();
-    console.log(`At ${window.startMs - 100}ms (before window):`, beforeWindow);
+    console.log(`At ${window.startMs - 600}ms (before window + buffer):`, beforeWindow);
     
     // At window start - should mute
     const atStart = index.findProfanityWindow(window.startMs, 0);
@@ -59,11 +60,12 @@ describe('CueIndex profanity window search', () => {
     const atEnd = index.findProfanityWindow(window.endMs, 0);
     expect(atEnd).not.toBeNull();
     console.log(`At ${window.endMs}ms (window end):`, atEnd);
-    
-    // After window - should NOT mute
-    const afterWindow = index.findProfanityWindow(window.endMs + 1, 0);
+
+    // After window + MUTE_DELAY_MS buffer - should NOT mute
+    // The implementation uses MUTE_DELAY_MS = 25ms post-buffer
+    const afterWindow = index.findProfanityWindow(window.endMs + 30, 0);
     expect(afterWindow).toBeNull();
-    console.log(`At ${window.endMs + 1}ms (after window):`, afterWindow);
+    console.log(`At ${window.endMs + 30}ms (after window + buffer):`, afterWindow);
   });
   
   it('should correctly get mute state for medium sensitivity', () => {
@@ -93,9 +95,9 @@ describe('CueIndex profanity window search', () => {
     
     // Test getMuteState
     const window = windows[0];
-    
-    // Before the mute window
-    const before = index.getMuteState(window.startMs - 100, 0, 'medium');
+
+    // Before the mute window - need to be outside the MUTE_ADVANCE_MS buffer (500ms)
+    const before = index.getMuteState(window.startMs - 600, 0, 'medium');
     expect(before.shouldMute).toBe(false);
     
     // During the mute window

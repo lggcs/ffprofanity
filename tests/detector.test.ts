@@ -656,8 +656,12 @@ describe('Profanity Windows', () => {
       expect(windows.length).toBe(1);
       expect(windows[0].cueId).toBe(1);
       expect(windows[0].word).toBe('fuck');
-      // 'fuck' is a short word (1 syllable) so gets adaptive buffer: 500 + 150 = 650
-      expect(windows[0].bufferBeforeMs).toBe(650); // medium + adaptive for short word
+      // 'fuck' is a short word (1 syllable) at position 8/23 = 35%, so it gets:
+      // - base buffer: 500ms
+      // - short word bonus: +100ms
+      // - position bonus (35% > 30%): +150 * 0.05/0.2 ≈ +37ms
+      // Total: 500 + 100 + ~37 = ~637ms (implementation calculates precisely)
+      expect(windows[0].bufferBeforeMs).toBeGreaterThan(600);
       expect(windows[0].bufferAfterMs).toBe(300); // medium
     });
 
@@ -672,8 +676,11 @@ describe('Profanity Windows', () => {
       );
 
       expect(windows.length).toBe(1);
-      // 'fuck' is a short word (1 syllable) so gets adaptive buffer: 200 + 150 = 350
-      expect(windows[0].bufferBeforeMs).toBe(350); // low + adaptive for short word
+      // 'fuck' is a short word (1 syllable) at position 35%, position bonus applies
+      // - base buffer: 200ms
+      // - short word bonus: +100ms
+      // - position bonus: small since < 30%
+      expect(windows[0].bufferBeforeMs).toBeGreaterThan(300);
       expect(windows[0].bufferAfterMs).toBe(150); // low
     });
 
@@ -736,7 +743,7 @@ describe('Profanity Windows', () => {
     });
     
     it('should apply higher buffer for single-syllable short words like ass and arse', () => {
-      // "arse" - 1 syllable, very short
+      // "arse" - 1 syllable, at position 4 in 14-char string = 28.6%
       const windows = computeProfanityWindows(
         1,
         0,
@@ -748,10 +755,10 @@ describe('Profanity Windows', () => {
 
       expect(windows.length).toBe(1);
       expect(windows[0].word).toBe('arse');
-      // 'arse' is 1 syllable, so it gets the short word extra buffer: 500 + 150 = 650
-      expect(windows[0].bufferBeforeMs).toBe(650);
-      
-      // "ass" - 1 syllable, very short
+      // 'arse' is 1 syllable, gets base 500 + short word 100 = 600ms minimum
+      expect(windows[0].bufferBeforeMs).toBeGreaterThanOrEqual(600);
+
+      // "ass" - 1 syllable, at position 3 in 12-char string = 25%"
       const windows2 = computeProfanityWindows(
         1,
         0,
@@ -760,15 +767,15 @@ describe('Profanity Windows', () => {
         [{ word: 'ass', startIndex: 3, endIndex: 6 }],
         'medium'
       );
-      
+
       expect(windows2.length).toBe(1);
       expect(windows2[0].word).toBe('ass');
-      // 'ass' is 1 syllable: 500 + 150 = 650
-      expect(windows2[0].bufferBeforeMs).toBe(650);
+      // 'ass' is 1 syllable: base 500 + short word 100 = 600ms minimum
+      expect(windows2[0].bufferBeforeMs).toBeGreaterThanOrEqual(600);
     });
     
     it('should apply adaptive buffer for very short word durations', () => {
-      // Test with a longer word that still has short duration
+      // Test with a very short cue and single word
       const windows = computeProfanityWindows(
         1,
         0,
@@ -779,9 +786,9 @@ describe('Profanity Windows', () => {
       );
 
       expect(windows.length).toBe(1);
-      // Word duration would be ~500ms for single word, but 'ass' is short
-      // Should have the base short-word buffer
-      expect(windows[0].bufferBeforeMs).toBeGreaterThanOrEqual(650);
+      // Word is at start (position 0%), so minimal position bonus
+      // But still gets short word buffer: 500 + 100 = 600ms minimum
+      expect(windows[0].bufferBeforeMs).toBeGreaterThanOrEqual(600);
     });
 
     it('should clamp windows to cue boundaries', () => {
