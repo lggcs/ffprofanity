@@ -599,7 +599,7 @@ function hideNativeSubtitlesForSite(source: string): void {
   // Detect site from source or hostname
   const hostname = window.location.hostname.toLowerCase();
   let site: string | undefined;
-  
+
   // Map hostname patterns to site identifiers
   if (hostname.includes('lookmovie')) {
     site = 'lookmovie';
@@ -609,6 +609,22 @@ function hideNativeSubtitlesForSite(source: string): void {
     site = '123chill';
   } else if (hostname.includes('youtube')) {
     site = 'youtube';
+  } else if (
+    hostname.includes('vidfast') ||
+    hostname.includes('vidsrc') ||
+    hostname.includes('vidzee') ||
+    hostname.includes('vidrock') ||
+    hostname.includes('embedsu') ||
+    hostname.includes('smashystream') ||
+    hostname.includes('vidplay') ||
+    hostname.includes('2embed') ||
+    hostname.includes('autoembed')
+  ) {
+    // VidFast, VidSrc, and similar iframe embed players use Video.js
+    site = 'videojs-player';
+  } else if (source === 'user-upload' || source.startsWith('user-upload')) {
+    // User-uploaded subtitles on embedded players - try to detect Video.js
+    site = 'videojs-player';
   } else {
     // Fall back to source-based detection
     site = source.split('.')[0];
@@ -661,7 +677,25 @@ function hideNativeSubtitlesForSite(source: string): void {
   } catch (e) {
     console.warn('[FFProfanity] Error disabling Video.js tracks:', e);
   }
-  
+
+  // Also try to disable native <track> elements on video elements
+  try {
+    const videos = document.querySelectorAll('video');
+    for (const video of videos) {
+      if (video.textTracks) {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          const track = video.textTracks[i];
+          if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+            console.log(`[FFProfanity] Disabling native <track> element: ${track.label || track.language}`);
+            track.mode = 'disabled';
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[FFProfanity] Error disabling native <track> elements:', e);
+  }
+
   // Hide subtitle display container via CSS
   const hideSelectors: Record<string, string[]> = {
     'lookmovie': [
@@ -676,6 +710,30 @@ function hideNativeSubtitlesForSite(source: string): void {
     'lookmovie.fetch-hls': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     'fmovies': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     '123chill': ['.vjs-text-track-display', '.vjs-text-track-cue'],
+    // Video.js-based iframe players (VidFast, VidSrc, etc.)
+    'videojs-player': [
+      // Video.js native selectors
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
+      '.video-js .vjs-text-track-display',
+      '.vjs-text-track-display div',
+      // Video.js cue container
+      '.vjs-text-track-cue > div',
+      // Generic subtitle containers
+      'video::cue',
+      // Plyr.js
+      '.plyr__captions',
+      '.plyr__caption',
+      '.plyr texttrack',
+      // JW Player
+      '.jw-captions',
+      '.jw-text-track-container',
+      '.jw-captions-container',
+      '.jw-text-track-cue',
+      // HTML5 native subtitle elements
+      '[class*="subtitle"]:not([class*="ffprofanity"])',
+      '[class*="caption"]:not([class*="ffprofanity"]):not([class*="icon"])',
+    ],
     'youtube': [
       '.ytp-caption-segment',
       '.caption-window',
@@ -704,18 +762,39 @@ function hideNativeSubtitlesForSite(source: string): void {
     // Inject CSS to hide native subtitles
     const styleId = 'ffprofanity-hide-native-subtitles';
     let style = document.getElementById(styleId) as HTMLStyleElement;
-    
+
     if (!style) {
       style = document.createElement('style');
       style.id = styleId;
       document.head.appendChild(style);
     }
-    
+
     // Add CSS rules with visibility:hidden instead of display:none (display:none can break layout)
     const css = selectors.map(s => `${s} { visibility: hidden !important; opacity: 0 !important; }`).join('\n');
     style.textContent = css;
-    
+
     console.log(`[FFProfanity] Injected CSS to hide native subtitles`);
+  } else {
+    // Fallback: inject generic Video.js selectors for unknown sites
+    const fallbackSelectors = [
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
+      '.video-js .vjs-text-track-display',
+      'video::cue'
+    ];
+    const styleId = 'ffprofanity-hide-native-subtitles-fallback';
+    let style = document.getElementById(styleId) as HTMLStyleElement;
+
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
+
+      const css = fallbackSelectors.map(s => `${s} { visibility: hidden !important; opacity: 0 !important; }`).join('\n');
+      style.textContent = css;
+
+      console.log(`[FFProfanity] Injected fallback CSS to hide native subtitles for unknown site: ${site}`);
+    }
   }
   
   // Schedule another attempt in case player loads later
@@ -737,6 +816,43 @@ function hideNativeSubtitlesForSite(source: string): void {
       console.warn('[FFProfanity] Error in delayed track disable:', e);
     }
   }, 3000);
+
+  // Set up mutation observer to continuously hide subtitle elements as they appear
+  const observerId = 'ffprofanity-subtitle-observer';
+  if (!document.getElementById(observerId)) {
+    const marker = document.createElement('div');
+    marker.id = observerId;
+    marker.style.display = 'none';
+    document.body.appendChild(marker);
+
+    const observer = new MutationObserver(() => {
+      // Re-disable any text tracks that might have been re-enabled
+      try {
+        const videos = document.querySelectorAll('video');
+        for (const video of videos) {
+          if (video.textTracks) {
+            for (let i = 0; i < video.textTracks.length; i++) {
+              const track = video.textTracks[i];
+              if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+                track.mode = 'disabled';
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore cross-origin errors
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
+    });
+
+    console.log('[FFProfanity] Mutation observer set up to continuously hide subtitles');
+  }
 }
 
 /**
