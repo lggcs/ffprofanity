@@ -54,8 +54,6 @@ This extension is designed with privacy as the primary concern:
 - **No network calls**: The extension works completely offline
 - **Local storage only**: Settings and subtitles are stored in browser storage
 
-Optional features (like auto-fetching subtitles) require explicit user opt-in.
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
