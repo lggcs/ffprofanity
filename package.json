@@ -10,24 +10,13 @@
     "build:prod": "./build.sh prod",
     "package": "./build.sh prod",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "eslint src --ext .ts,.tsx",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,html}\""
+    "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/chrome": "^0.0.268",
     "@types/firefox-webext-browser": "^120.0.4",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
-    "eslint": "^8.57.0",
-    "fast-levenshtein": "^3.0.0",
-    "prettier": "^3.2.5",
+    "esbuild": "^0.21.5",
     "typescript": "^5.4.2",
     "vite": "^5.1.6",
-    "vitest": "^1.4.0",
-    "web-ext": "^7.11.0"
-  },
-  "dependencies": {
-    "fast-levenshtein": "^3.0.0"
+    "vitest": "^1.4.0"
   }
 }
