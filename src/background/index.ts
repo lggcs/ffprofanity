@@ -11,6 +11,7 @@ import type {
   SubtitleTrack,
 } from "../types";
 import { isSubtitleUrl, detectSubtitleFormat } from "../lib/extractor";
+import { getLanguageName } from "../lib/language";
 
 // Active mute states per tab
 const muteStates = new Map<
@@ -374,11 +375,10 @@ browser.webRequest.onCompleted.addListener(
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
     const language = langMatch ? langMatch[1].toLowerCase() : undefined;
 
-    // Extract label from filename
-    const filenameMatch = url.match(/\/([^\/]+)\.(?:vtt|srt|ass|ssa)$/i);
-    const label = filenameMatch
-      ? filenameMatch[1].replace(/[_\-\+]/g, " ")
-      : `Subtitle (${format.toUpperCase()})`;
+    // Extract label - use human-readable language name instead of filename hash
+    // The page script will send tracks with numbered labels (e.g., "English 1", "English 2")
+    // The background's webRequest tracks are just a fallback with basic labels
+    const label = getLanguageName(language || "unknown");
 
     const track: SubtitleTrack = {
       id: `network-${tabId}-${Date.now()}`,
@@ -516,16 +516,16 @@ async function injectPageScriptForUrl(
     return false;
   }
 
-  // PlutoTV injection
+  // PlutoTV injection - only inject into main frame
   if (/pluto\.tv|plutotv\.com/i.test(url)) {
     try {
       await browser.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, frameIds: [0] },
         files: ["page-scripts/plutotv-injected.js"],
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected PlutoTV script into tab ${tabId}`);
+      console.log(`[FFProfanity] Injected PlutoTV script into tab ${tabId} (main frame only)`);
       return true;
     } catch (error) {
       console.error(`[FFProfanity] Failed to inject script:`, error);
@@ -535,15 +535,16 @@ async function injectPageScriptForUrl(
   }
 
   // YouTube injection - bypasses CSP by using MAIN world
+  // Only inject into main frame (frameId: 0) to avoid XHR intercepts in iframes
   if (/youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(url)) {
     try {
       await browser.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, frameIds: [0] },
         files: ["page-scripts/youtube-injected.js"],
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected YouTube script into tab ${tabId}`);
+      console.log(`[FFProfanity] Injected YouTube script into tab ${tabId} (main frame only)`);
       return true;
     } catch (error) {
       console.error(`[FFProfanity] Failed to inject YouTube script:`, error);
@@ -553,15 +554,16 @@ async function injectPageScriptForUrl(
   }
 
   // fmovies injection - bypasses CSP by using MAIN world
+  // Only inject into main frame (frameId: 0) to avoid XHR intercepts in iframes
   if (/fmovies\.[a-z]+|fmovie\.[a-z]+/i.test(url)) {
     try {
       await browser.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, frameIds: [0] },
         files: ["page-scripts/fmovies-injected.js"],
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected fmovies script into tab ${tabId}`);
+      console.log(`[FFProfanity] Injected fmovies script into tab ${tabId} (main frame only)`);
       return true;
     } catch (error) {
       console.error(`[FFProfanity] Failed to inject fmovies script:`, error);
@@ -571,15 +573,16 @@ async function injectPageScriptForUrl(
   }
 
   // LookMovie injection - bypasses CSP by using MAIN world
+  // Only inject into main frame (frameId: 0) to avoid XHR intercepts in iframes like reCaptcha
   if (/lookmovie\d*\.to|lookmovie\.[a-z]+|lookmovie\d*\.[a-z]+/i.test(url)) {
     try {
       await browser.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, frameIds: [0] },
         files: ["page-scripts/lookmovie-injected.js"],
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected LookMovie script into tab ${tabId}`);
+      console.log(`[FFProfanity] Injected LookMovie script into tab ${tabId} (main frame only)`);
       return true;
     } catch (error) {
       console.error(`[FFProfanity] Failed to inject LookMovie script:`, error);

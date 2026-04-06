@@ -15,6 +15,11 @@
 (function () {
   "use strict";
 
+  // Skip execution in iframes - only run in top frame
+  if (window.self !== window.top) {
+    return;
+  }
+
   const EXTRACTOR_ID = "fmovies";
   const sentSubtitles = new Set<string>();
   const sentContent = new Set<string>();

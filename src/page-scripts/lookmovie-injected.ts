@@ -11,9 +11,18 @@
 (function () {
   "use strict";
 
+  // Skip execution in iframes (like reCaptcha) - only run in top frame
+  // This prevents XHR intercepts from firing in wrong contexts
+  if (window.self !== window.top) {
+    return;
+  }
+
   const EXTRACTOR_ID = "lookmovie";
   const sentSubtitles = new Set<string>();
   let lastTracksHash = "";
+  // Flag to block XHR intercept when user makes a selection
+  let userSelectionInProgress = false;
+  let pendingUserSelection: SubtitleTrack | null = null;
 
   function log(...args: unknown[]): void {
     console.log("[LookMovie]", ...args);
@@ -28,17 +37,65 @@
   function sendSubtitles(subs: SubtitleTrack[], source: string): void {
     if (!subs || subs.length === 0) return;
 
-    // Deduplicate by content hash
-    const key = JSON.stringify(subs);
-    if (sentSubtitles.has(key)) return;
-    sentSubtitles.add(key);
+    // User-selected tracks should ALWAYS be sent (bypass deduplication)
+    // to allow re-selecting the same track
+    const isUserSelection = source === "lookmovie.user-subtitle-selected";
 
-    log(`Sending ${subs.length} subtitles from ${source}`);
+    // For initial track detection, number tracks by language to distinguish same-language tracks
+    // e.g., "English" -> "English 1", "English 2", etc.
+    // User selections already have numbered labels from findTrackForSelectedItem
+    let finalSubs = subs;
+    if (!isUserSelection) {
+      // First, count total tracks per language
+      const languageTotalCounts: Record<string, number> = {};
+      for (const sub of subs) {
+        const lang = sub.language.toLowerCase();
+        languageTotalCounts[lang] = (languageTotalCounts[lang] || 0) + 1;
+      }
+
+      // Then number tracks per language/label combination
+      const languageLabelCounts: Record<string, number> = {};
+      const numberedSubs = subs.map(sub => {
+        const normalizedLabel = sub.label || getLanguageName(sub.language) || "Unknown";
+        const lang = sub.language.toLowerCase();
+        const key = `${lang}:${normalizedLabel}`;
+        languageLabelCounts[key] = (languageLabelCounts[key] || 0) + 1;
+        const number = languageLabelCounts[key];
+
+        // Always add number suffix
+        const numberedLabel = `${normalizedLabel} ${number}`;
+        return {
+          ...sub,
+          label: numberedLabel,
+        };
+      });
+
+      // Post-process: remove " 1" suffix only if there's exactly 1 track for that language
+      finalSubs = numberedSubs.map(sub => {
+        const lang = sub.language.toLowerCase();
+        const totalForLang = languageTotalCounts[lang];
+        // Only remove " 1" if there's a single track for this language
+        if (totalForLang === 1 && sub.label.endsWith(' 1')) {
+          return {
+            ...sub,
+            label: sub.label.replace(/ 1$/, ''),
+          };
+        }
+        return sub;
+      });
+
+      // Deduplicate by URL hash
+      const key = finalSubs.map(s => s.url).sort().join('|');
+      if (sentSubtitles.has(key)) return;
+      sentSubtitles.add(key);
+    }
+
+    log(`Sending ${finalSubs.length} subtitles from ${source}`);
     window.postMessage(
       {
         type: "FFPROFANITY_SUBTITLES_DETECTED",
         source: source,
-        subtitles: subs,
+        subtitles: finalSubs,
       },
       "*",
     );
@@ -384,6 +441,18 @@
         const canReadResponseText =
           xhr.responseType === "" || xhr.responseType === "text";
 
+        // Block XHR intercept if user is making a manual selection
+        if (userSelectionInProgress) {
+          log("XHR intercept blocked - user selection in progress");
+          return;
+        }
+
+        // If we have a pending user selection, use that instead of XHR
+        if (pendingUserSelection) {
+          log("XHR intercept blocked - using pending user selection:", pendingUserSelection.url.substring(0, 60));
+          return;
+        }
+
         // Strategy 2a: HLS Manifest subtitle extraction
         if (
           canReadResponseText &&
@@ -712,12 +781,18 @@
       log("Selecting subtitle:", targetItem.textContent?.trim());
       (targetItem as HTMLElement).click();
 
-      // Trigger track detection after selection, then hide native subtitles
-      setTimeout(() => checkAndSendTracks("lookmovie.subtitle-selected"), 500);
-      setTimeout(
-        () => checkAndSendTracks("lookmovie.subtitle-selected-delayed"),
-        2000,
-      );
+      // Find and send only the selected track (not all tracks)
+      // This ensures we use exactly "English 1" instead of auto-selecting first English
+      setTimeout(() => {
+        const selectedTrack = findTrackForSelectedItem(targetItem!);
+        if (selectedTrack) {
+          log("Auto-select: sending track:", selectedTrack.url);
+          sendSubtitles([selectedTrack], "lookmovie.auto-selected");
+        } else {
+          // Fallback: send all tracks and let content script pick
+          checkAndSendTracks("lookmovie.subtitle-selected");
+        }
+      }, 500);
       setTimeout(() => hideNativeSubtitles(), 1000);
     } else if (!targetItem) {
       log("No English subtitle option found in menu");
@@ -837,20 +912,204 @@
           const selectedText = subtitleItem.textContent?.trim();
           log("User selected subtitle:", selectedText);
 
+          // Set flag to block XHR intercept
+          userSelectionInProgress = true;
+
           // Clear the "already clicked" flag so we can process the new selection
           (window as any).__ffprofanity_lm_cc_clicked = false;
 
-          // Trigger subtitle detection for the new track
-          // Wait a bit for the player to switch tracks
-          setTimeout(() => {
-            checkAndSendTracks("lookmovie.user-subtitle-change");
-            // Then turn off native subtitles again
-            setTimeout(() => hideNativeSubtitles(), 300);
-          }, 500);
+          // Find the track that corresponds to the clicked item
+          // LookMovie uses VideoJS, try to find the track URL from the player
+          const selectedTrack = findTrackForSelectedItem(subtitleItem);
+
+          if (selectedTrack) {
+            // Store pending selection
+            pendingUserSelection = selectedTrack;
+
+            // Send ONLY the selected track with a special source to indicate user selection
+            log("Sending user-selected track:", selectedTrack.url);
+            sendSubtitles([selectedTrack], "lookmovie.user-subtitle-selected");
+
+            // Clear pending state after a delay
+            setTimeout(() => {
+              userSelectionInProgress = false;
+              pendingUserSelection = null;
+            }, 2000);
+          } else {
+            // Fallback: trigger full track detection
+            setTimeout(() => {
+              checkAndSendTracks("lookmovie.user-subtitle-change");
+              userSelectionInProgress = false;
+            }, 500);
+          }
+
+          // Turn off native subtitles after selection
+          setTimeout(() => hideNativeSubtitles(), 300);
         }
       },
       true,
     );
+  }
+
+  // ========================================
+  // Find the track URL for a selected menu item
+  // The menu item text (e.g., "English 5") maps to a VideoJS track
+  // ========================================
+  function findTrackForSelectedItem(menuItem: Element): SubtitleTrack | null {
+    try {
+      // Try to get VideoJS player
+      const pageWindow = (window as any).wrappedJSObject || window;
+      const videojs = pageWindow.videojs;
+
+      if (!videojs) {
+        log("findTrackForSelectedItem: videojs not available");
+        return null;
+      }
+
+      // Get player from videojs.players or getPlayerIds
+      let player: any = null;
+
+      if (typeof videojs.getPlayerIds === "function") {
+        const playerIds = videojs.getPlayerIds() as string[];
+        if (playerIds.length > 0) {
+          player = videojs.getPlayer.call(videojs, playerIds[0]);
+        }
+      } else if (videojs.players) {
+        const playerIds = Object.keys(videojs.players);
+        if (playerIds.length > 0) {
+          player = videojs.players[playerIds[0]];
+        }
+      }
+
+      if (!player) {
+        log("findTrackForSelectedItem: no player found");
+        return null;
+      }
+
+      // Get the menu item text to match
+      const selectedText = menuItem.textContent?.trim() || "";
+      log(`findTrackForSelectedItem: looking for track matching "${selectedText}"`);
+
+      // Get remote text track elements (these have the URLs)
+      const remoteEls = typeof player.remoteTextTrackEls === "function"
+        ? player.remoteTextTrackEls()
+        : [];
+      const textTracks = typeof player.textTracks === "function"
+        ? player.textTracks()
+        : [];
+
+      // Extract number from selected text (e.g., "English 5" -> "5")
+      const numberMatch = selectedText.match(/\s+(\d+)$/);
+      const selectedNumber = numberMatch ? numberMatch[1] : null;
+      const selectedLang = selectedText.replace(/\s+\d+$/, "").trim().toLowerCase();
+
+      log(`findTrackForSelectedItem: parsed lang="${selectedLang}" number="${selectedNumber}"`);
+
+      // Build list of all tracks with their labels and URLs
+      interface TrackInfo {
+        url: string;
+        language: string;
+        label: string;
+        index: number;
+      }
+      const allTracks: TrackInfo[] = [];
+
+      for (let i = 0; i < remoteEls.length; i++) {
+        const trackEl = remoteEls[i];
+        if (!trackEl || !trackEl.src) continue;
+
+        const track = textTracks[i];
+        const url = trackEl.src;
+        const label = track?.label || trackEl.getAttribute?.("label") || "";
+        const lang = track?.language || trackEl.getAttribute?.("srclang") ||
+                     extractLanguageFromUrl(url);
+
+        allTracks.push({
+          url,
+          language: lang,
+          label: label,
+          index: i,
+        });
+      }
+
+      log(`findTrackForSelectedItem: found ${allTracks.length} tracks to search`);
+
+      // Strategy 1: Exact label match (e.g., "English 5" -> track with label "English 5")
+      for (const t of allTracks) {
+        if (t.label === selectedText) {
+          log(`findTrackForSelectedItem: exact match "${t.label}"`);
+          return { url: t.url, language: t.language, label: t.label };
+        }
+      }
+
+      // Strategy 2: Same language + same number (e.g., "English 5" -> 5th English track)
+      if (selectedNumber !== null) {
+        // Get all tracks of the same language
+        const sameLangTracks = allTracks.filter(t => {
+          const trackLang = t.language.toLowerCase();
+          const trackLabelLang = t.label.toLowerCase().replace(/\s+\d+$/, "").trim();
+          return trackLang === selectedLang || trackLabelLang === selectedLang ||
+                 trackLabelLang.includes(selectedLang) || selectedLang.includes(trackLabelLang);
+        });
+
+        log(`findTrackForSelectedItem: found ${sameLangTracks.length} tracks for language "${selectedLang}"`);
+
+        // Use the number as 1-based index
+        const targetIndex = parseInt(selectedNumber, 10);
+        if (targetIndex > 0 && targetIndex <= sameLangTracks.length) {
+          // Try to match by same URL hash pattern
+          // LookMovie URLs like: eng_1f7c39381d7d39d08e67333c2111db87.vtt
+          // The hash uniquely identifies the subtitle
+          const selectedTrack = sameLangTracks[targetIndex - 1];
+          log(`findTrackForSelectedItem: using track #${targetIndex} for "${selectedText}": ${selectedTrack.url.substring(0, 60)}`);
+          return {
+            url: selectedTrack.url,
+            language: selectedTrack.language,
+            label: selectedText, // Use the menu text as label
+          };
+        }
+      }
+
+      // Strategy 3: If no number, find first track of the language
+      if (selectedNumber === null) {
+        for (const t of allTracks) {
+          const trackLang = t.language.toLowerCase();
+          const trackLabelLower = t.label.toLowerCase();
+          if (trackLang === selectedLang || trackLabelLower.includes(selectedLang)) {
+            log(`findTrackForSelectedItem: language-only match "${t.label}"`);
+            return { url: t.url, language: t.language, label: t.label };
+          }
+        }
+      }
+
+      // Strategy 4: Try to find track by URL hash that matches currently showing
+      // When VideoJS shows a subtitle, it marks its track.mode = "showing"
+      for (let i = 0; i < textTracks.length; i++) {
+        const track = textTracks[i];
+        if (track.mode === "showing") {
+          const trackEl = remoteEls[i];
+          if (trackEl && trackEl.src) {
+            // Check if this track's language matches
+            const trackLang = track.language?.toLowerCase() || "";
+            const trackLabel = track.label || "";
+            if (trackLang === selectedLang || trackLabel.toLowerCase().includes(selectedLang)) {
+              log(`findTrackForSelectedItem: found showing track "${trackLabel}"`);
+              return {
+                url: trackEl.src,
+                language: track.language || extractLanguageFromUrl(trackEl.src),
+                label: trackLabel,
+              };
+            }
+          }
+        }
+      }
+
+      log("findTrackForSelectedItem: no matching track found");
+    } catch (e) {
+      log("findTrackForSelectedItem error:", (e as Error).message || e);
+    }
+
+    return null;
   }
 
   // ========================================
@@ -970,9 +1229,11 @@
     setupSubtitleChangeListener();
     watchForPlayerTransition();
 
-    // Listen for content script message to hide native subtitles
+    // Listen for content script messages
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
+
+      // Hide native subtitles
       if (event.data?.type === "FFPROFANITY_HIDE_NATIVE_SUBTITLES") {
         log("Received HIDE_NATIVE_SUBTITLES message");
         // Try multiple times as the menu may need to be opened first
@@ -980,6 +1241,15 @@
         setTimeout(() => hideNativeSubtitles(), 500);
         setTimeout(() => hideNativeSubtitles(), 1500);
         setTimeout(() => hideNativeSubtitles(), 3000);
+      }
+
+      // Track selected from popup - hide native subtitles to prevent double display
+      if (event.data?.type === "FFPROFANITY_TRACK_SELECTED") {
+        log("Received TRACK_SELECTED message:", event.data?.track?.label);
+        // Hide native subtitles immediately
+        hideNativeSubtitles();
+        setTimeout(() => hideNativeSubtitles(), 500);
+        setTimeout(() => hideNativeSubtitles(), 1500);
       }
     });
 

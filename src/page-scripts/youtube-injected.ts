@@ -13,6 +13,11 @@
 export function youTubePageScript(): void {
   "use strict";
 
+  // Skip execution in iframes - only run in top frame
+  if (window.self !== window.top) {
+    return;
+  }
+
   const EXTRACTOR_ID = "youtube-ytInitialPlayerResponse";
   const sentSubtitleUrls = new Set<string>();
   const capturedTimedtext: Map<string, string> = new Map();

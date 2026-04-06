@@ -13,6 +13,7 @@ export interface Cue {
   profanityScore: number;
   profanityMatches: ProfanityMatch[];
   profanityWindows?: ProfanityWindow[];  // Pre-computed muting windows for medium/low sensitivity
+  source?: string;  // Optional source identifier for track replacement logic
 }
 
 // Profanity match in text

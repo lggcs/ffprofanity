@@ -457,7 +457,13 @@ function handleInterceptedMessage(event: MessageEvent): void {
   // Handle individual cues from textTracks (HLS.js timed cues)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CUE") {
     if (!videoElement) {
-      return; // No video element in this frame
+      // Forward to top frame if in iframe
+      if (window.self !== window.top) {
+        try {
+          window.top?.postMessage(event.data, '*');
+        } catch (e) { /* Cross-origin blocked */ }
+      }
+      return;
     }
     textTracksCues.push(event.data);
     return;
@@ -466,6 +472,22 @@ function handleInterceptedMessage(event: MessageEvent): void {
   // Handle subtitle content captured from network interception (YouTube timedtext)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
     if (!videoElement) {
+      // Forward to top frame if in iframe
+      if (window.self !== window.top && event.data?.content) {
+        console.log("[FFProfanity] Forwarding captured subtitle from iframe to top frame");
+        try {
+          window.top?.postMessage({
+            type: "FFPROFANITY_SUBTITLE_CAPTURED",
+            content: event.data.content,
+            language: event.data.language,
+            isAsr: event.data.isAsr,
+            videoId: event.data.videoId,
+            url: event.data.url
+          }, '*');
+        } catch (e) {
+          console.log("[FFProfanity] Could not forward captured subtitle (cross-origin blocked)");
+        }
+      }
       console.log("[FFProfanity] Skipping captured subtitle - no video element in this frame");
       return;
     }
@@ -491,6 +513,26 @@ function handleInterceptedMessage(event: MessageEvent): void {
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
     // Skip if no video element - only process subtitles in frame with video
     if (!videoElement) {
+      // If we're in an iframe and have content, forward to top frame
+      // This handles cases where subtitle fetch happens in iframe contexts
+      if (window.self !== window.top && event.data?.content) {
+        console.log("[FFProfanity] Forwarding subtitle content from iframe to top frame");
+        try {
+          window.top?.postMessage({
+            type: "FFPROFANITY_SUBTITLE_CONTENT",
+            content: event.data.content,
+            language: event.data.language,
+            label: event.data.label,
+            source: event.data.source,
+            segmentLoadTime: event.data.segmentLoadTime,
+            streamType: event.data.streamType,
+            url: event.data.url
+          }, '*');
+        } catch (e) {
+          // Cross-origin restrictions may block this
+          console.log("[FFProfanity] Could not forward content to top frame (cross-origin blocked)");
+        }
+      }
       console.log("[FFProfanity] Skipping subtitle content - no video element in this frame");
       return;
     }
@@ -539,6 +581,21 @@ function handleInterceptedMessage(event: MessageEvent): void {
   // Skip if no video element - only process subtitles in frame with video
   // This prevents iframes from processing subtitles
   if (!videoElement) {
+    // If we're in an iframe and have subtitles, forward to top frame
+    // This handles cases where XHR interception happens in iframe contexts
+    if (window.self !== window.top && event.data?.subtitles) {
+      console.log("[FFProfanity] Forwarding subtitle detection from iframe to top frame");
+      try {
+        window.top?.postMessage({
+          type: "FFPROFANITY_SUBTITLES_DETECTED",
+          source: event.data.source,
+          subtitles: event.data.subtitles
+        }, '*');
+      } catch (e) {
+        // Cross-origin restrictions may block this
+        console.log("[FFProfanity] Could not forward to top frame (cross-origin blocked)");
+      }
+    }
     console.log("[FFProfanity] Skipping subtitle detection - no video element in this frame");
     return;
   }
@@ -581,8 +638,13 @@ function handleInterceptedMessage(event: MessageEvent): void {
   if (tracks.length > 0) {
     // For user-initiated subtitle changes, force selection to update
     // PlutoTV's automatic interception should NOT force selection (content comes via FFPROFANITY_SUBTITLE_CONTENT)
+    // Sources that should force selection:
+    // - 'user-subtitle-selected': User clicked on a subtitle menu item
+    // - 'subtitle-selected': Legacy LookMovie auto-selection
+    // - 'auto-selected': LookMovie auto-selected "English 1" on page load
     const forceSelection = source.includes('user-subtitle') ||
-                          source.includes('subtitle-selected');
+                          source.includes('subtitle-selected') ||
+                          source.includes('auto-selected');
     addDetectedTracks(tracks, forceSelection);
   }
 
@@ -1162,8 +1224,14 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     );
 
     if (existingTrack) {
-      console.log(`[FFProfanity] User changed subtitle, switching to: ${existingTrack.label}`);
-      selectTrack(existingTrack);
+      // Preserve the source from the incoming track (e.g., 'lookmovie.user-subtitle-selected')
+      // This is critical for processCues to know when to replace vs accumulate cues
+      const trackWithCorrectSource = {
+        ...existingTrack,
+        source: trackToSelect.source
+      };
+      console.log(`[FFProfanity] User changed subtitle, switching to: ${trackWithCorrectSource.label} (source: ${trackWithCorrectSource.source})`);
+      selectTrack(trackWithCorrectSource);
       showNotification("success", "Subtitle updated", true);
     } else if (newTracks.length > 0) {
       // Track not in detectedTracks yet (shouldn't happen but fallback)
@@ -1232,6 +1300,20 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
 
   // Note: track selection is in-memory only - not persisted
 
+  // Hide native subtitles on streaming sites when user selects a track
+  // This prevents double display (native overlay + our overlay)
+  hideNativeSubtitlesForSite(track.source || 'user-selection');
+
+  // Notify page script about track selection (for sites like LookMovie that need to sync)
+  window.postMessage({
+    type: 'FFPROFANITY_TRACK_SELECTED',
+    track: {
+      url: track.url,
+      label: track.label,
+      language: track.language,
+    },
+  }, '*');
+
   // If track has URL, fetch it
   if (track.url) {
     try {
@@ -1250,7 +1332,7 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
         `[FFProfanity] Content preview: ${content.substring(0, 200)}...`,
       );
 
-      await handleSubtitleUpload(content, track.label);
+      await handleSubtitleUpload(content, track.label, track.source);
     } catch (error) {
       console.error("[FFProfanity] Failed to fetch subtitle track:", error);
       showNotification(
@@ -2034,9 +2116,10 @@ function handleMessage(message: unknown): Promise<unknown> {
 async function handleSubtitleUpload(
   content: string,
   filename?: string,
+  source?: string,
 ): Promise<void> {
   // Hide native subtitles on streaming sites (prevents double display)
-  hideNativeSubtitlesForSite('user-upload');
+  hideNativeSubtitlesForSite(source || 'user-upload');
 
   console.log(
     `[FFProfanity] Parsing subtitle content (${content.length} bytes)`,
@@ -2063,7 +2146,14 @@ async function handleSubtitleUpload(
   // For uploaded subtitle files, use cues as-is (VOD/static content)
   // Live TV timing offsets are only applied in handleSubtitleContent()
   // for intercepted PlutoTV segments which have context (streamType, segmentLoadTimeMs)
-  processCues(result.cues);
+  
+  // Tag cues with source for proper replacement/accumulate logic in processCues
+  const taggedCues = result.cues.map(cue => ({
+    ...cue,
+    source: source || 'user-upload'
+  }));
+  
+  processCues(taggedCues);
   // Note: cues are NOT saved to storage - per-session only
 
   // Create a track entry for user uploads
@@ -2137,15 +2227,25 @@ function processCues(newCues: Cue[]): void {
   // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
   // If new cues have similar timing range to existing, replace instead of accumulate
   const firstCueSource = newCues[0]?.source || '';
+  console.log(`[FFProfanity] processCues: firstCueSource="${firstCueSource}", existing cues=${cues.length}`);
   const isSyncedSource = firstCueSource === 'fmovies' ||
                          firstCueSource === 'wyzie';
   const isYouTubeSource = firstCueSource === 'youtube-intercepted' ||
                           firstCueSource === 'youtube';
   const isPlutoTVSource = firstCueSource.includes('plutotv');
+  // User explicitly selected a different subtitle track - replace cues entirely
+  // This handles both page-script sources and track.source values
+  const isUserSelection = firstCueSource === 'lookmovie.user-subtitle-selected' ||
+                          firstCueSource === 'lookmovie.auto-selected' ||
+                          firstCueSource === 'user-selection' ||
+                          firstCueSource.includes('user-subtitle');
 
-  // YouTube live streams send stream-relative timestamps - replace cues entirely
-  // This handles both live streams and regular YouTube videos
-  if (isYouTubeSource && cues.length > 0) {
+  if (isUserSelection && cues.length > 0) {
+    console.log(
+      `[FFProfanity] Replacing ${cues.length} cues with ${processedNewCues.length} (user selected different track)`
+    );
+    cues = processedNewCues;
+  } else if (isYouTubeSource && cues.length > 0) {
     // For YouTube, replace cues when we get new timedtext responses
     // This handles both live streams (stream-relative time) and VOD updates
     const existingSource = cues[0]?.source || '';

@@ -7,6 +7,11 @@
 export function plutoTVPageScript(): void {
   "use strict";
 
+  // Skip execution in iframes - only run in top frame
+  if (window.self !== window.top) {
+    return;
+  }
+
   const EXTRACTOR_ID = "plutotv";
   const sentSubtitles = new Set<string>();
 
