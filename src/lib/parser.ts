@@ -13,7 +13,7 @@ export interface XTimestampMap {
 
 export interface ParseResult {
   cues: Cue[];
-  format: "srt" | "ass" | "vtt" | "xml" | "json3";
+  format: "srt" | "ass" | "vtt" | "xml" | "json3" | "jellyfin";
   errors: string[];
   timestampMap?: XTimestampMap;
 }
@@ -95,13 +95,18 @@ export function parseXTimestampMap(content: string): XTimestampMap | null {
 /**
  * Determine subtitle format from content
  */
-export function detectFormat(content: string): "srt" | "ass" | "vtt" | "xml" | "json3" | null {
+export function detectFormat(content: string): "srt" | "ass" | "vtt" | "xml" | "json3" | "jellyfin" | null {
   // Remove BOM and trim whitespace
   const trimmed = content.replace(/^\uFEFF/, "").trim();
 
   // YouTube JSON3 format (wireMagic: pb3)
   if (trimmed.startsWith("{") && trimmed.includes('"wireMagic"')) {
     return "json3";
+  }
+
+  // Jellyfin JSON format (TrackEvents array)
+  if (trimmed.startsWith("{") && trimmed.includes('"TrackEvents"')) {
+    return "jellyfin";
   }
 
   // YouTube Timedtext XML format (most common from timedtext API)
@@ -551,6 +556,47 @@ export function parseYouTubeJSON3(content: string): Cue[] {
 }
 
 /**
+ * Parse Jellyfin JSON subtitle format
+ * Format: {"TrackEvents":[{"Id":"1","Text":"...",StartPositionTicks":...,"EndPositionTicks":...}]}
+ * Ticks are 10,000 per millisecond (1 tick = 100 nanoseconds)
+ */
+export function parseJellyfinJSON(content: string): Cue[] {
+  const cues: Cue[] = [];
+  let id = 0;
+
+  try {
+    const data = JSON.parse(content);
+
+    // Validate it's Jellyfin format
+    if (!Array.isArray(data.TrackEvents)) {
+      console.warn('[Parser] Not valid Jellyfin format (no TrackEvents)');
+      return [];
+    }
+
+    for (const event of data.TrackEvents) {
+      if (!event.Text) continue;
+
+      // Convert ticks to milliseconds (10,000 ticks = 1ms)
+      const startMs = Math.floor(event.StartPositionTicks / 10000);
+      const endMs = Math.floor(event.EndPositionTicks / 10000);
+
+      const text = event.Text.trim();
+
+      if (text && startMs < endMs) {
+        cues.push(createCue(id, startMs, endMs, text));
+        id++;
+      }
+    }
+
+    cues.sort((a, b) => a.startMs - b.startMs);
+  } catch (error) {
+    console.error('[Parser] Error parsing Jellyfin JSON:', error);
+  }
+
+  return cues;
+}
+
+/**
  * Clean subtitle text by decoding HTML entities and stripping formatting tags
  * Handles double-encoded entities like &amp;lt; -> &lt; -> <
  */
@@ -609,7 +655,7 @@ export function parseSubtitle(
 
   if (!format) {
     errors.push(
-      "Unable to detect subtitle format. Supported formats: SRT, ASS/SSA, WEBVTT, XML, JSON3",
+      "Unable to detect subtitle format. Supported formats: SRT, ASS/SSA, WEBVTT, XML, JSON3, Jellyfin",
     );
     return { cues: [], format: "srt", errors };
   }
@@ -634,6 +680,9 @@ export function parseSubtitle(
         break;
       case "json3":
         cues = parseYouTubeJSON3(content);
+        break;
+      case "jellyfin":
+        cues = parseJellyfinJSON(content);
         break;
     }
 

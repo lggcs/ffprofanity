@@ -591,6 +591,25 @@ async function injectPageScriptForUrl(
     }
   }
 
+  // Jellyfin injection - for local and remote Jellyfin servers
+  // Matches localhost:8096, local IP:8096, and remote Jellyfin instances
+  if (/localhost:\d+|127\.0\.0\.1:\d+|:8096|\/web\/.*videoId/i.test(url) || /jellyfin/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        files: ["page-scripts/jellyfin-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      console.log(`[FFProfanity] Injected Jellyfin script into tab ${tabId} (main frame only)`);
+      return true;
+    } catch (error) {
+      console.error(`[FFProfanity] Failed to inject Jellyfin script:`, error);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
   return false;
 }
 

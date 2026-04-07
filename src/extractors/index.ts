@@ -9,6 +9,7 @@ import { YouTubeExtractor } from "./youtube";
 import { OneTwoThreeChillExtractor } from "./123chill";
 import { PlutoTVExtractor } from "./plutotv";
 import { FMoviesExtractor } from "./fmovies";
+import { JellyfinExtractor } from "./jellyfin";
 import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
@@ -18,6 +19,7 @@ const extractors: SiteExtractor[] = [
   new OneTwoThreeChillExtractor(),
   new PlutoTVExtractor(),
   new FMoviesExtractor(),
+  new JellyfinExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -100,3 +102,4 @@ export { youTubeExtractor } from "./youtube";
 export { oneTwoThreeChillExtractor } from "./123chill";
 export { plutotvExtractor } from "./plutotv";
 export { fmoviesExtractor } from "./fmovies";
+export { jellyfinExtractor } from "./jellyfin";

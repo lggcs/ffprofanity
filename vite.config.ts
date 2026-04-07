@@ -28,6 +28,10 @@ export default defineConfig({
           __dirname,
           "src/page-scripts/lookmovie-injected.ts",
         ),
+        "page-scripts/jellyfin": resolve(
+          __dirname,
+          "src/page-scripts/jellyfin-injected.ts",
+        ),
       },
       output: {
         entryFileNames: (chunkInfo) => {
