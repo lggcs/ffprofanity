@@ -158,9 +158,11 @@ describe('CueIndex profanity window search', () => {
     // Before all windows should not be muted
     const beforeAll = index.getMuteState(500, 0, 'medium');
     expect(beforeAll.shouldMute).toBe(false);
-    
+
     // After all windows should not be muted
-    const afterAll = index.getMuteState(4800, 0, 'medium');
+    // Note: Last word 'shit' gets extended post-buffer due to its position,
+    // so the window ends around 4808ms. Check past that.
+    const afterAll = index.getMuteState(4900, 0, 'medium');
     expect(afterAll.shouldMute).toBe(false);
   });
 });

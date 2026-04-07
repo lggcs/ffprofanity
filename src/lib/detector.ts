@@ -249,15 +249,35 @@ export function computeProfanityWindows(
       adaptivePreBuffer += positionBonus;
     }
 
+    // CRITICAL FIX: Words at end of cue need extra post-buffer
+    // Syllable estimates often push end-of-cue words to the cue end,
+    // but actors often speak faster. Extend mute past the estimated word end.
+    let adaptivePostBuffer = buffer.after;
+    if (charPositionRatio > 0.7) {
+      // Last 30% of text: extend post-buffer significantly
+      // The closer to the end, the more uncertain the timing
+      const postRatio = (charPositionRatio - 0.7) / 0.3; // 0 to 1
+      const postBonus = Math.round(300 + 500 * postRatio * postRatio);
+      adaptivePostBuffer += postBonus;
+    } else if (charPositionRatio > 0.5) {
+      // Last half: moderate post-buffer adjustment
+      const postBonus = Math.round(200 * (charPositionRatio - 0.5) / 0.2);
+      adaptivePostBuffer += postBonus;
+    }
+
+    // For end-of-cue words, don't clip to cueEndMs - allow extending beyond
+    // This handles cases where syllable estimate is wrong about word ending time
+    const allowExtendedEnd = charPositionRatio > 0.75;
+
     const window: ProfanityWindow = {
       cueId,
       word: match.word,
       startMs: Math.max(cueStartMs, wordStartMs - adaptivePreBuffer),
-      endMs: Math.min(cueEndMs, wordEndMs + buffer.after),
+      endMs: allowExtendedEnd ? wordEndMs + adaptivePostBuffer : Math.min(cueEndMs, wordEndMs + adaptivePostBuffer),
       wordStartMs,
       wordEndMs,
       bufferBeforeMs: adaptivePreBuffer,
-      bufferAfterMs: buffer.after
+      bufferAfterMs: adaptivePostBuffer
     };
 
     windows.push(window);
