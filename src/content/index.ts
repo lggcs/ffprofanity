@@ -56,6 +56,7 @@ let currentProfanityCue: Cue | null = null; // Track current profanity cue for m
 let currentProfanityWindow: ProfanityWindow | null = null; // Track current profanity window for medium/low sensitivity
 let playbackRate: number = 1.0; // Track playback speed
 let isMuted: boolean = false; // Track mute state to avoid redundant messages
+let originalVolume: number | null = null; // Store original volume before muting (for mobile fallback)
 
 // Track last known good time to ignore hover preview seeks
 let lastStableTimeMs: number = 0;
@@ -2573,34 +2574,46 @@ function debounce<T extends (...args: unknown[]) => void>(
 
 /**
  * Send mute message immediately (no debounce for tighter timing)
+ * On mobile Firefox, tabs.update({ muted: true }) is not supported,
+ * so we mute the video element directly as the primary method.
  */
 function sendMuteNow(): void {
   if (isMuted) return; // Already muted
 
   // For medium/low sensitivity, use window end time; for high, use cue end time
   const unmuteTime = currentProfanityWindow?.endMs || currentProfanityCue?.endMs || 0;
-  const reasonInfo = currentProfanityWindow 
-    ? `window "${currentProfanityWindow.word}"` 
+  const reasonInfo = currentProfanityWindow
+    ? `window "${currentProfanityWindow.word}"`
     : (currentProfanityCue ? `cue ${currentProfanityCue.id}` : "unknown");
 
   console.log(
     `[FFProfanity] MUTE: ${reasonInfo} at ${videoElement?.currentTime?.toFixed(2)}s, unmute at ${unmuteTime}ms`,
   );
 
+  // Primary method: mute video element directly (works on both desktop and mobile)
+  if (videoElement) {
+    originalVolume = videoElement.volume;
+    videoElement.muted = true;
+  }
+
+  // Secondary method: ask background to mute tab (works on desktop only)
   try {
     browser.runtime.sendMessage({
       type: "muteNow",
       reasonId: currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown",
       expectedUnmuteAt: unmuteTime,
     });
-    isMuted = true;
   } catch {
     console.warn("[FFProfanity] Failed to send mute message - background not ready");
   }
+
+  isMuted = true;
 }
 
 /**
  * Send unmute message immediately (no debounce for tighter timing)
+ * On mobile Firefox, tabs.update({ muted: false }) is not supported,
+ * so we unmute the video element directly as the primary method.
  */
 function sendUnmuteNow(): void {
   if (!isMuted) return; // Already unmuted
@@ -2609,14 +2622,25 @@ function sendUnmuteNow(): void {
     `[FFProfanity] UNMUTE at ${videoElement?.currentTime?.toFixed(2)}s`,
   );
 
+  // Primary method: unmute video element directly (works on both desktop and mobile)
+  if (videoElement && originalVolume !== null) {
+    videoElement.muted = false;
+    videoElement.volume = originalVolume;
+    originalVolume = null;
+  } else if (videoElement) {
+    videoElement.muted = false;
+  }
+
+  // Secondary method: ask background to unmute tab (works on desktop only)
   try {
     browser.runtime.sendMessage({
       type: "unmuteNow",
     });
-    isMuted = false;
   } catch {
     console.warn("[FFProfanity] Failed to send unmute message - background not ready");
   }
+
+  isMuted = false;
 }
 
 /**
