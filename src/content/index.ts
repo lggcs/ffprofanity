@@ -6,6 +6,7 @@
 import { log, debug, warn, error } from "../lib/logger";
 import { storage } from "../lib/storage";
 import { parseSubtitle, sanitizeText, ParseResult } from "../lib/parser";
+import { escapeHtml } from "../lib/dom";
 import {
   ProfanityDetector,
   createDetector,
@@ -1394,7 +1395,7 @@ function showNotification(
   notificationEl.innerHTML = `
     <div class="ffprofanity-notification-content">
       <span class="ffprofanity-notification-icon">${type === "success" ? "✓" : type === "error" ? "✗" : "ℹ"}</span>
-      <span class="ffprofanity-notification-text">${content}</span>
+      <span class="ffprofanity-notification-text">${escapeHtml(content)}</span>
       ${autoSelected ? `<button class="ffprofanity-notification-change">Change</button>` : ""}
     </div>
   `;

@@ -608,6 +608,8 @@ export function cleanSubtitleText(text: string): string {
   // e.g., &amp;lt; -> &lt; -> <
   for (let i = 0; i < 3; i++) {
     const prev = result;
+    // Safe: ephemeral DOM element used solely to decode HTML entities;
+    // never appended to the document.
     const div = document.createElement("div");
     div.innerHTML = result;
     result = div.textContent || result;

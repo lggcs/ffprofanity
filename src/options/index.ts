@@ -5,6 +5,7 @@
 
 import '../styles/options.css';
 import { storage } from '../lib/storage';
+import { escapeHtml } from '../lib/dom';
 import type { Settings } from '../types';
 
 // DOM Elements - will be initialized in init()
@@ -384,14 +385,14 @@ function updatePreview(): void {
     return;
   }
 
-  // Build preview HTML
+  // Build preview HTML — escape all dynamic values to prevent XSS
   const previewWords = categoryExamples.slice(0, 3);
   const previewHtml = previewWords
-    .map(e => `${e.display} → <b>${e.censored}</b>`)
+    .map(e => `${escapeHtml(e.display)} → <b>${escapeHtml(e.censored)}</b>`)
     .join('<br>');
 
   previewTextEl.innerHTML = `
-    <strong>Category: ${category.charAt(0).toUpperCase() + category.slice(1)}</strong><br>
+    <strong>Category: ${escapeHtml(category.charAt(0).toUpperCase() + category.slice(1))}</strong><br>
     ${previewHtml}
   `;
 }
