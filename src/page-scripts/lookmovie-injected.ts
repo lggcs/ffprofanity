@@ -25,7 +25,9 @@
   let pendingUserSelection: SubtitleTrack | null = null;
 
   function log(...args: unknown[]): void {
-    console.log("[LookMovie]", ...args);
+    if ((window as any).__FFPROFANITY_DEBUG__) {
+      console.log("[FFProfanity]", ...args);
+    }
   }
 
   interface SubtitleTrack {

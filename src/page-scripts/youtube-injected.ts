@@ -23,7 +23,9 @@ export function youTubePageScript(): void {
   const capturedTimedtext: Map<string, string> = new Map();
 
   function log(...args: unknown[]): void {
-    console.log("[FFProfanity-YouTube]", ...args);
+    if ((window as any).__FFPROFANITY_DEBUG__) {
+      console.log("[FFProfanity]", ...args);
+    }
   }
 
   /**
@@ -242,18 +244,22 @@ export function youTubePageScript(): void {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          console.warn(
-            "[FFProfanity-YouTube] Fetch failed:",
-            response.status,
-            response.statusText,
-          );
+          if ((window as any).__FFPROFANITY_DEBUG__) {
+            console.warn(
+              "[FFProfanity] Fetch failed:",
+              response.status,
+              response.statusText,
+            );
+          }
           return null;
         }
 
         const text = await response.text();
 
         if (!text || text.length < 10) {
-          console.warn("[FFProfanity-YouTube] Empty or too short response");
+          if ((window as any).__FFPROFANITY_DEBUG__) {
+            console.warn("[FFProfanity] Empty or too short response");
+          }
           return null;
         }
 
@@ -278,14 +284,18 @@ export function youTubePageScript(): void {
       } catch (fetchError) {
         clearTimeout(timeoutId);
         if ((fetchError as Error).name === 'AbortError') {
-          console.warn("[FFProfanity-YouTube] Fetch timed out after 10s:", url.substring(0, 60));
+          if ((window as any).__FFPROFANITY_DEBUG__) {
+            console.warn("[FFProfanity] Fetch timed out after 10s:", url.substring(0, 60));
+          }
         } else {
           throw fetchError;
         }
         return null;
       }
     } catch (error) {
-      console.error("[FFProfanity-YouTube] Fetch error:", error);
+      if ((window as any).__FFPROFANITY_DEBUG__) {
+        console.error("[FFProfanity] Fetch error:", error);
+      }
       return null;
     }
   }
@@ -380,7 +390,9 @@ export function youTubePageScript(): void {
 
       sendSubtitleTracks(subtitles);
     } catch (e) {
-      console.warn("[FFProfanity-YouTube] Error extracting:", e);
+      if ((window as any).__FFPROFANITY_DEBUG__) {
+        console.warn("[FFProfanity] Error extracting:", e);
+      }
     }
   }
 

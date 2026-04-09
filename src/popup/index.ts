@@ -5,6 +5,7 @@
 
 import "../styles/popup.css";
 import type { Settings, SubtitleTrack } from "../types";
+import { error } from '../lib/logger';
 
 // State
 let isActive = false;
@@ -154,8 +155,8 @@ async function loadSettings(): Promise<void> {
 
     // Setup color input sync
     setupColorSync();
-  } catch (error) {
-    console.error("Failed to load settings:", error);
+  } catch (err) {
+    error("Failed to load settings:", err);
   }
 }
 
@@ -245,8 +246,8 @@ async function saveSettings(): Promise<void> {
 
     // Switch back to main view after a short delay
     setTimeout(showMainView, 800);
-  } catch (error) {
-    console.error("Failed to save settings:", error);
+  } catch (err) {
+    error("Failed to save settings:", err);
   }
 }
 
@@ -329,8 +330,8 @@ async function loadStatus(): Promise<void> {
         trackSection.classList.add("hidden");
       }
     }
-  } catch (error) {
-    console.error("Failed to load status:", error);
+  } catch (err) {
+    error("Failed to load status:", err);
   }
 }
 
@@ -454,8 +455,8 @@ async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
     currentTrack = track;
     updateTrackSection();
     trackList.classList.add("hidden");
-  } catch (error) {
-    console.error("Failed to select track:", error);
+  } catch (err) {
+    error("Failed to select track:", err);
   }
 }
 
@@ -492,8 +493,8 @@ async function handleFileUpload(event: Event): Promise<void> {
       });
       trackList.classList.add("hidden");
       await loadStatus();
-    } catch (error) {
-      console.error("Failed to upload cues:", error);
+    } catch (err) {
+      error("Failed to upload cues:", err);
     }
   };
   reader.readAsText(file);

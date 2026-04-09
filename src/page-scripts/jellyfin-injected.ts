@@ -27,7 +27,9 @@
   const sentContent = new Set<string>();
 
   function log(...args: unknown[]) {
-    console.log(`[FFProfanity-jellyfin]`, ...args);
+    if ((window as any).__FFPROFANITY_DEBUG__) {
+      console.log("[FFProfanity]", ...args);
+    }
   }
 
   /**

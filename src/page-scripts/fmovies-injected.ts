@@ -26,7 +26,9 @@
   let ccAutoClicked = false;
 
   function log(...args: unknown[]) {
-    console.log(`[FFProfanity-fmovies]`, ...args);
+    if ((window as any).__FFPROFANITY_DEBUG__) {
+      console.log("[FFProfanity]", ...args);
+    }
   }
 
   /**

@@ -2,6 +2,9 @@
  * Core types for the Profanity Filter extension
  */
 
+// Build-time constant injected by esbuild --define
+declare const __DEV__: boolean;
+
 // Cue structure representing a single subtitle entry
 export interface Cue {
   id: number;

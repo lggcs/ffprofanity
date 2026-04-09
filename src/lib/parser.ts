@@ -4,6 +4,7 @@
  */
 
 import type { Cue } from "../types";
+import { warn, error } from './logger';
 
 export interface XTimestampMap {
   mpegTs: number;
@@ -430,7 +431,7 @@ export function parseYouTubeXML(content: string): Cue[] {
     const parseError = doc.querySelector('parsererror');
     if (parseError) {
       // Try to extract error message
-      console.warn('[Parser] XML parsing error:', parseError.textContent);
+      warn('Parser: XML parsing error:', parseError.textContent);
       return [];
     }
 
@@ -494,8 +495,8 @@ export function parseYouTubeXML(content: string): Cue[] {
       return cues;
     }
 
-  } catch (error) {
-    console.error('[Parser] Error parsing YouTube XML:', error);
+  } catch (err) {
+    error('Parser: Error parsing YouTube XML:', err);
   }
 
   return cues;
@@ -524,7 +525,7 @@ export function parseYouTubeJSON3(content: string): Cue[] {
     
     // Validate it's JSON3 format
     if (data.wireMagic !== "pb3" || !Array.isArray(data.events)) {
-      console.warn('[Parser] Not valid JSON3 format');
+      warn('Parser: Not valid JSON3 format');
       return [];
     }
 
@@ -548,8 +549,8 @@ export function parseYouTubeJSON3(content: string): Cue[] {
     }
 
     cues.sort((a, b) => a.startMs - b.startMs);
-  } catch (error) {
-    console.error('[Parser] Error parsing YouTube JSON3:', error);
+  } catch (err) {
+    error('Parser: Error parsing YouTube JSON3:', err);
   }
 
   return cues;
@@ -569,7 +570,7 @@ export function parseJellyfinJSON(content: string): Cue[] {
 
     // Validate it's Jellyfin format
     if (!Array.isArray(data.TrackEvents)) {
-      console.warn('[Parser] Not valid Jellyfin format (no TrackEvents)');
+      warn('Parser: Not valid Jellyfin format (no TrackEvents)');
       return [];
     }
 
@@ -589,8 +590,8 @@ export function parseJellyfinJSON(content: string): Cue[] {
     }
 
     cues.sort((a, b) => a.startMs - b.startMs);
-  } catch (error) {
-    console.error('[Parser] Error parsing Jellyfin JSON:', error);
+  } catch (err) {
+    error('Parser: Error parsing Jellyfin JSON:', err);
   }
 
   return cues;
@@ -691,9 +692,9 @@ export function parseSubtitle(
     cues.forEach((cue, index) => {
       cue.id = index;
     });
-  } catch (error) {
+  } catch (err) {
     errors.push(
-      `Parse error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      `Parse error: ${err instanceof Error ? err.message : "Unknown error"}`,
     );
   }
 

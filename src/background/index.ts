@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { isSubtitleUrl, detectSubtitleFormat } from "../lib/extractor";
 import { getLanguageName } from "../lib/language";
+import { log, debug, warn, error } from '../lib/logger';
 
 // Active mute states per tab
 const muteStates = new Map<
@@ -74,9 +75,9 @@ async function muteTab(
 
   try {
     await browser.tabs.update(tabId, { muted: true });
-    console.log(`Tab ${tabId} muted for reason ${reasonId}`);
-  } catch (error) {
-    console.error(`Failed to mute tab ${tabId}:`, error);
+    log(`Tab ${tabId} muted for reason ${reasonId}`);
+  } catch (err) {
+    error(`Failed to mute tab ${tabId}:`, err);
   }
 
   // Set safety timer in case unmute message never arrives
@@ -86,7 +87,7 @@ async function muteTab(
     const timer = setTimeout(async () => {
       const currentState = muteStates.get(tabId);
       if (currentState?.muted && currentState.reasonId === reasonId) {
-        console.log(`Safety timer triggered, unmuting tab ${tabId}`);
+        debug(`Safety timer triggered, unmuting tab ${tabId}`);
         await unmuteTab(tabId, "safety-timer");
       }
     }, safetyDelay);
@@ -113,9 +114,9 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
   if (state?.muted) {
     try {
       await browser.tabs.update(tabId, { muted: false });
-      console.log(`Tab ${tabId} unmuted`);
-    } catch (error) {
-      console.error(`Failed to unmute tab ${tabId}:`, error);
+      log(`Tab ${tabId} unmuted`);
+    } catch (err) {
+      error(`Failed to unmute tab ${tabId}:`, err);
     }
   }
 
@@ -153,7 +154,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
       frames = await browser.webNavigation.getAllFrames({ tabId });
     } catch (e) {
       // webNavigation permission may not be available, query main frame only
-      console.log("[FFProfanity] webNavigation.getAllFrames failed, querying main frame only");
+      debug("webNavigation.getAllFrames failed, querying main frame only");
     }
 
     if (!frames || frames.length === 0) {
@@ -216,9 +217,9 @@ async function getAggregatedStatus(tabId: number): Promise<{
       }
     }
 
-    console.log(`[FFProfanity] Aggregated status for tab ${tabId}: hasVideo=${hasVideo}, cues=${totalCues}, active=${active}`);
-  } catch (error) {
-    console.error("[FFProfanity] Error getting frame status:", error);
+    debug(`Aggregated status for tab ${tabId}: hasVideo=${hasVideo}, cues=${totalCues}, active=${active}`);
+  } catch (err) {
+    error("Error getting frame status:", err);
   }
 
   // Update cache
@@ -255,7 +256,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
   // Get tabId from sender (for content script messages) or from message (for popup messages)
   const tabId = sender.tab?.id || (msg.tabId as number | undefined);
 
-  console.log(`Received message from ${sender.tab ? `tab ${tabId}` : 'popup'}:`, msg.type);
+  debug(`Received message from ${sender.tab ? `tab ${tabId}` : 'popup'}:`, msg.type);
 
   switch (msg.type) {
     case "muteNow": {
@@ -398,7 +399,7 @@ browser.webRequest.onCompleted.addListener(
     // Avoid duplicates
     if (!existing.some((t) => t.url === track.url)) {
       detectedSubtitles.set(tabId, [...existing, track]);
-      console.log(`Detected subtitle: ${label} (${url})`);
+      log(`Detected subtitle: ${label} (${url})`);
 
       // Notify content script of new track
       browser.tabs
@@ -438,7 +439,7 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 // Initialize extension
 browser.runtime.onInstalled.addListener((details) => {
-  console.log("Profanity Filter installed:", details.reason);
+  log("Profanity Filter installed:", details.reason);
 });
 
 /**
@@ -503,7 +504,7 @@ browser.declarativeNetRequest
   .catch((err) => {
     // Rules may already exist, ignore error
     if (!err.message?.includes("Duplicate rule id")) {
-      console.warn("[FFProfanity] declarativeNetRequest setup:", err);
+      warn("declarativeNetRequest setup:", err);
     }
   });
 
@@ -525,10 +526,10 @@ async function injectPageScriptForUrl(
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected PlutoTV script into tab ${tabId} (main frame only)`);
+      log(`Injected PlutoTV script into tab ${tabId} (main frame only)`);
       return true;
-    } catch (error) {
-      console.error(`[FFProfanity] Failed to inject script:`, error);
+    } catch (err) {
+      error(`Failed to inject script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }
@@ -544,10 +545,10 @@ async function injectPageScriptForUrl(
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected YouTube script into tab ${tabId} (main frame only)`);
+      log(`Injected YouTube script into tab ${tabId} (main frame only)`);
       return true;
-    } catch (error) {
-      console.error(`[FFProfanity] Failed to inject YouTube script:`, error);
+    } catch (err) {
+      error(`Failed to inject YouTube script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }
@@ -563,10 +564,10 @@ async function injectPageScriptForUrl(
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected fmovies script into tab ${tabId} (main frame only)`);
+      log(`Injected fmovies script into tab ${tabId} (main frame only)`);
       return true;
-    } catch (error) {
-      console.error(`[FFProfanity] Failed to inject fmovies script:`, error);
+    } catch (err) {
+      error(`Failed to inject fmovies script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }
@@ -582,10 +583,10 @@ async function injectPageScriptForUrl(
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected LookMovie script into tab ${tabId} (main frame only)`);
+      log(`Injected LookMovie script into tab ${tabId} (main frame only)`);
       return true;
-    } catch (error) {
-      console.error(`[FFProfanity] Failed to inject LookMovie script:`, error);
+    } catch (err) {
+      error(`Failed to inject LookMovie script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }
@@ -601,10 +602,10 @@ async function injectPageScriptForUrl(
         world: "MAIN" as any,
       });
       injectedTabs.add(tabId);
-      console.log(`[FFProfanity] Injected Jellyfin script into tab ${tabId} (main frame only)`);
+      log(`Injected Jellyfin script into tab ${tabId} (main frame only)`);
       return true;
-    } catch (error) {
-      console.error(`[FFProfanity] Failed to inject Jellyfin script:`, error);
+    } catch (err) {
+      error(`Failed to inject Jellyfin script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }

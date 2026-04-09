@@ -22,7 +22,9 @@ export function plutoTVPageScript(): void {
   const isLiveTVPage = window.location.href.includes("/live-tv/");
 
   function log(...args: unknown[]): void {
-    console.log("[PlutoTV]", ...args);
+    if ((window as any).__FFPROFANITY_DEBUG__) {
+      console.log("[FFProfanity]", ...args);
+    }
   }
 
   function isValidSubtitleUrl(url: string): boolean {
@@ -584,7 +586,9 @@ export function plutoTVPageScript(): void {
           }
         }
       } catch (err) {
-        console.error('[PlutoTV] textTracks monitor error:', err);
+        if ((window as any).__FFPROFANITY_DEBUG__) {
+          console.error('[FFProfanity] textTracks monitor error:', err);
+        }
       }
     }, 200); // Check 5 times per second
     

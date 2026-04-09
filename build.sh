@@ -12,6 +12,15 @@ MODE="${1:-dev}"
 
 echo "Building Profanity Filter extension (${MODE} mode)..."
 
+# Set __DEV__ define based on build mode
+if [ "$MODE" = "prod" ] || [ "$MODE" = "package" ]; then
+    DEV_DEFINE="__DEV__=false"
+    ESBUILD_MINIFY="--minify"
+else
+    DEV_DEFINE="__DEV__=true"
+    ESBUILD_MINIFY=""
+fi
+
 # Clean dist directory
 rm -rf dist
 mkdir -p dist/icons
@@ -20,23 +29,23 @@ mkdir -p dist/page-scripts
 
 # Bundle TypeScript files with esbuild
 echo "Bundling background script..."
-npm exec -- esbuild src/background/index.ts --bundle --outfile=dist/background.js --format=esm --platform=browser --target=firefox109
+npm exec -- esbuild src/background/index.ts --bundle --outfile=dist/background.js --format=esm --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 echo "Bundling content script..."
-npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox109
+npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 echo "Bundling options script..."
-npm exec -- esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox109
+npm exec -- esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 echo "Bundling popup script..."
-npm exec -- esbuild src/popup/index.ts --bundle --outfile=dist/popup.js --format=iife --platform=browser --target=firefox109
+npm exec -- esbuild src/popup/index.ts --bundle --outfile=dist/popup.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 echo "Bundling page-scripts..."
-npm exec -- esbuild src/page-scripts/plutotv-injected.ts --bundle --outfile=dist/page-scripts/plutotv-injected.js --format=iife --platform=browser --target=firefox109
-npm exec -- esbuild src/page-scripts/youtube-injected.ts --bundle --outfile=dist/page-scripts/youtube-injected.js --format=iife --platform=browser --target=firefox109
-npm exec -- esbuild src/page-scripts/fmovies-injected.ts --bundle --outfile=dist/page-scripts/fmovies-injected.js --format=iife --platform=browser --target=firefox109
-npm exec -- esbuild src/page-scripts/lookmovie-injected.ts --bundle --outfile=dist/page-scripts/lookmovie-injected.js --format=iife --platform=browser --target=firefox109
-npm exec -- esbuild src/page-scripts/jellyfin-injected.ts --bundle --outfile=dist/page-scripts/jellyfin-injected.js --format=iife --platform=browser --target=firefox109
+npm exec -- esbuild src/page-scripts/plutotv-injected.ts --bundle --outfile=dist/page-scripts/plutotv-injected.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
+npm exec -- esbuild src/page-scripts/youtube-injected.ts --bundle --outfile=dist/page-scripts/youtube-injected.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
+npm exec -- esbuild src/page-scripts/fmovies-injected.ts --bundle --outfile=dist/page-scripts/fmovies-injected.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
+npm exec -- esbuild src/page-scripts/lookmovie-injected.ts --bundle --outfile=dist/page-scripts/lookmovie-injected.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
+npm exec -- esbuild src/page-scripts/jellyfin-injected.ts --bundle --outfile=dist/page-scripts/jellyfin-injected.js --format=iife --platform=browser --target=firefox113 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 # Copy HTML files
 echo "Copying HTML files..."

@@ -15,4 +15,7 @@ export default defineConfig({
       '@': '/src',
     },
   },
+  define: {
+    __DEV__: true,
+  },
 });

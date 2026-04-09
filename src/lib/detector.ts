@@ -11,6 +11,7 @@
 
 import { DEFAULT_WORDLIST } from './wordlist';
 import { isAllowedInContext, getProfanityConfidence } from './context-rules';
+import { log, debug, warn, error } from './logger';
 import {
   DEFAULT_SUBSTITUTIONS,
   buildSubstitutionMap,
@@ -567,12 +568,12 @@ export class ProfanityDetector {
    * Enable or disable substitutions
    */
   setSubstitutions(enabled: boolean, category?: SubstitutionCategory): void {
-    console.log(`[FFProfanity] DEBUG setSubstitutions(${enabled}, ${category})`);
+    debug(`setSubstitutions(${enabled}, ${category})`);
     this.useSubstitutions = enabled;
     if (category) {
       this.substitutionCategory = category;
     }
-    console.log(`[FFProfanity] DEBUG useSubstitutions now: ${this.useSubstitutions}, category: ${this.substitutionCategory}`);
+    debug(`useSubstitutions now: ${this.useSubstitutions}, category: ${this.substitutionCategory}`);
   }
 
   /**
@@ -801,7 +802,7 @@ export class ProfanityDetector {
       if (this.useSubstitutions) {
         // Try to get a fun substitution
         const sub = this.getSubstitution(match.word);
-        console.log(`[FFProfanity] DEBUG getSubstitution("${match.word}"):`, sub, `(useSubstitutions: ${this.useSubstitutions}, category: ${this.substitutionCategory})`);
+        debug(`getSubstitution("${match.word}"):`, sub, `(useSubstitutions: ${this.useSubstitutions}, category: ${this.substitutionCategory})`);
         replacement = sub || '[CENSORED]';
       } else {
         replacement = '[CENSORED]';

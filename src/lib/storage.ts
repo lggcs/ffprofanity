@@ -4,6 +4,7 @@
  */
 
 import type { Cue, Settings, StorageSchema, SubtitleTrack } from '../types';
+import { warn } from './logger';
 
 const CURRENT_SCHEMA_VERSION = 1;
 
@@ -175,7 +176,7 @@ export class StorageManager {
    */
   async importData(data: StorageSchema): Promise<void> {
     if (data.version !== CURRENT_SCHEMA_VERSION) {
-      console.warn('Storage schema version mismatch, data may need migration');
+      warn('Storage schema version mismatch, data may need migration');
     }
 
     await Promise.all([
