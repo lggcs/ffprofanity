@@ -85,6 +85,19 @@ function setupEventHandlers(): void {
   useSubstitutionsCheckbox.addEventListener("change", () => {
     substitutionCategorySelect.classList.toggle("hidden", !useSubstitutionsCheckbox.checked);
   });
+
+  // Disable upcoming cues when profanity-only is active
+  showProfanityOnlyCheckbox.addEventListener("change", () => {
+    updatePopupUpcomingCuesState();
+  });
+}
+
+function updatePopupUpcomingCuesState(): void {
+  const isProfanityOnly = showProfanityOnlyCheckbox.checked;
+  showUpcomingCheckbox.disabled = isProfanityOnly;
+  if (isProfanityOnly) {
+    showUpcomingCheckbox.checked = false;
+  }
 }
 
 async function loadSettings(): Promise<void> {
@@ -114,7 +127,7 @@ async function loadSettings(): Promise<void> {
     offsetSlider.value = String(settings.offsetMs || 0);
     offsetValue.textContent = `${settings.offsetMs || 0}ms`;
     sensitivitySelect.value = settings.sensitivity || "medium";
-    showUpcomingCheckbox.checked = settings.showUpcomingCues !== false;
+    showUpcomingCheckbox.checked = settings.showUpcomingCues === true;
     showProfanityOnlyCheckbox.checked = settings.showProfanityOnly === true;
     useSubstitutionsCheckbox.checked = settings.useSubstitutions !== false;  // Default to true
     substitutionCategorySelect.value = settings.substitutionCategory || "monkeys";
@@ -135,6 +148,9 @@ async function loadSettings(): Promise<void> {
 
     // Show/hide category select based on substitutions checkbox
     substitutionCategorySelect.classList.toggle("hidden", !useSubstitutionsCheckbox.checked);
+
+    // Disable upcoming cues when profanity-only is active
+    updatePopupUpcomingCuesState();
 
     // Setup color input sync
     setupColorSync();

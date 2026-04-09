@@ -139,7 +139,7 @@ async function loadSettings(): Promise<void> {
   }
 
   // Set display settings
-  showUpcomingCuesCheckbox.checked = settings.showUpcomingCues ?? true;
+  showUpcomingCuesCheckbox.checked = settings.showUpcomingCues ?? false;
   showProfanityOnlyCheckbox.checked = settings.showProfanityOnly ?? false;
   upcomingCuesCountSelect.value = String(settings.upcomingCuesCount ?? 2);
   fontSizeSelect.value = settings.fontSize || 'medium';
@@ -159,8 +159,11 @@ async function loadSettings(): Promise<void> {
   // Update upcoming count visibility
   const upcomingCountGroup = document.getElementById('upcomingCountGroup');
   if (upcomingCountGroup) {
-    upcomingCountGroup.style.display = settings.showUpcomingCues ? 'block' : 'none';
+    upcomingCountGroup.style.display = showUpcomingCuesCheckbox.checked ? 'block' : 'none';
   }
+
+  // Disable upcoming cues when profanity-only mode is active
+  updateUpcomingCuesDisabledState();
 
   // Get cue count
   const cues = await storage.getCues();
@@ -216,12 +219,21 @@ function updateSubstitutionUI(): void {
 }
 
 // Display settings handlers
-function handleDisplaySettingsChange(): void {
-  // Toggle visibility of upcoming count based on checkbox
+function updateUpcomingCuesDisabledState(): void {
+  const isProfanityOnly = showProfanityOnlyCheckbox.checked;
+  showUpcomingCuesCheckbox.disabled = isProfanityOnly;
+  if (isProfanityOnly) {
+    showUpcomingCuesCheckbox.checked = false;
+  }
   const upcomingCountGroup = document.getElementById('upcomingCountGroup');
   if (upcomingCountGroup) {
-    upcomingCountGroup.style.display = showUpcomingCuesCheckbox.checked ? 'block' : 'none';
+    upcomingCountGroup.style.display = (showUpcomingCuesCheckbox.checked && !isProfanityOnly) ? 'block' : 'none';
   }
+}
+
+function handleDisplaySettingsChange(): void {
+  // Toggle visibility of upcoming count and disable state based on checkboxes
+  updateUpcomingCuesDisabledState();
   updateDisplayPreview();
   autoSaveSettings();
 }

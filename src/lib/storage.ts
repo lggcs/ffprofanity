@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS: Settings = {
   substitutionCategory: 'monkeys',
   customSubstitutions: {},
   // Subtitle display settings
-  showUpcomingCues: true,
+  showUpcomingCues: false,
   showProfanityOnly: false,
   upcomingCuesCount: 2,
   fontSize: 'medium',

@@ -1913,8 +1913,8 @@ function applyDisplaySettings(): void {
   const bgB = parseInt(bgColor.slice(5, 7), 16);
   currentCueEl.style.background = `rgba(${bgR}, ${bgG}, ${bgB}, ${bgOpacity})`;
 
-  // Apply upcoming cues visibility
-  nextCuesEl.style.display = settings.showUpcomingCues ? "block" : "none";
+  // Apply upcoming cues visibility (hidden when profanity-only mode is active)
+  nextCuesEl.style.display = (settings.showUpcomingCues && !settings.showProfanityOnly) ? "block" : "none";
 }
 
 /**
@@ -2694,9 +2694,10 @@ function updatePlayback(currentTimeMs: number): void {
     currentCueEl.style.display = "block";
     currentCueEl.classList.remove("ffprofanity-hidden");
 
-    // Show next cues preview if enabled
+    // Show next cues preview if enabled (disabled when profanity-only mode is active)
     if (
       settings.showUpcomingCues &&
+      !settings.showProfanityOnly &&
       settings.upcomingCuesCount > 0 &&
       nextCuesEl
     ) {
