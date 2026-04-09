@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Mute profanity and display censored subtitles while watching videos. All processing is done locally to protect your privacy.",
   "author": "ffprofanity",
-  "homepage_url": "https://github.com/ffprofanity/ffprofanity",
+  "homepage_url": "https://github.com/lggcs/ffprofanity",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
