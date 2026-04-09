@@ -606,15 +606,20 @@ export function cleanSubtitleText(text: string): string {
 
   // Decode HTML entities multiple times to handle double/triple encoding
   // e.g., &amp;lt; -> &lt; -> <
+  const HTML_ENTITIES: Record<string, string> = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&apos;": "'",
+    "&nbsp;": " ",
+  };
+  const entityRe = /&(?:amp|lt|gt|quot|#39|apos|nbsp);/gi;
+
   for (let i = 0; i < 3; i++) {
     const prev = result;
-    // Safe: ephemeral DOM element used solely to decode HTML entities;
-    // never appended to the document.
-    const div = document.createElement("div");
-    div.innerHTML = result;
-    result = div.textContent || result;
-
-    // If no change, stop decoding
+    result = result.replace(entityRe, (m) => HTML_ENTITIES[m.toLowerCase()] || m);
     if (result === prev) break;
   }
 
@@ -638,12 +643,13 @@ export function cleanSubtitleText(text: string): string {
 }
 
 /**
- * Sanitize text for safe DOM insertion
+ * Sanitize text for safe DOM insertion.
+ * Since all DOM assignments now use textContent/replaceChildren (which are
+ * inherently safe), this is a pass-through. Kept as a named function so
+ * call sites remain explicit about sanitization intent.
  */
 export function sanitizeText(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+  return text;
 }
 
 /**
