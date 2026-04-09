@@ -26,6 +26,7 @@ let previewEl: HTMLDivElement;
 let previewTextEl: HTMLDivElement;
 // Display settings elements
 let showUpcomingCuesCheckbox: HTMLInputElement;
+let showProfanityOnlyCheckbox: HTMLInputElement;
 let upcomingCuesCountSelect: HTMLSelectElement;
 let fontSizeSelect: HTMLSelectElement;
 let fontColorInput: HTMLInputElement;
@@ -63,6 +64,7 @@ async function init(): Promise<void> {
 
   // Display settings elements
   showUpcomingCuesCheckbox = document.getElementById('showUpcomingCues') as HTMLInputElement;
+  showProfanityOnlyCheckbox = document.getElementById('showProfanityOnly') as HTMLInputElement;
   upcomingCuesCountSelect = document.getElementById('upcomingCuesCount') as HTMLSelectElement;
   fontSizeSelect = document.getElementById('fontSize') as HTMLSelectElement;
   fontColorInput = document.getElementById('fontColor') as HTMLInputElement;
@@ -94,6 +96,7 @@ async function init(): Promise<void> {
 
   // Display settings event handlers
   showUpcomingCuesCheckbox.addEventListener('change', handleDisplaySettingsChange);
+  showProfanityOnlyCheckbox.addEventListener('change', handleDisplaySettingsChange);
   upcomingCuesCountSelect.addEventListener('change', handleDisplaySettingsChange);
   fontSizeSelect.addEventListener('change', handleDisplaySettingsChange);
   fontColorInput.addEventListener('input', handleColorChange);
@@ -137,6 +140,7 @@ async function loadSettings(): Promise<void> {
 
   // Set display settings
   showUpcomingCuesCheckbox.checked = settings.showUpcomingCues ?? true;
+  showProfanityOnlyCheckbox.checked = settings.showProfanityOnly ?? false;
   upcomingCuesCountSelect.value = String(settings.upcomingCuesCount ?? 2);
   fontSizeSelect.value = settings.fontSize || 'medium';
   fontColorInput.value = settings.fontColor || '#ffffff';
@@ -453,6 +457,7 @@ async function saveAllSettings(): Promise<void> {
     customSubstitutions,
     // Display settings
     showUpcomingCues: showUpcomingCuesCheckbox.checked,
+    showProfanityOnly: showProfanityOnlyCheckbox.checked,
     upcomingCuesCount: parseInt(upcomingCuesCountSelect.value, 10),
     fontSize: fontSizeSelect.value as Settings['fontSize'],
     fontColor: fontColorInput.value,

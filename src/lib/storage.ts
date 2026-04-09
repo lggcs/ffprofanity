@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS: Settings = {
   customSubstitutions: {},
   // Subtitle display settings
   showUpcomingCues: true,
+  showProfanityOnly: false,
   upcomingCuesCount: 2,
   fontSize: 'medium',
   fontColor: '#ffffff',

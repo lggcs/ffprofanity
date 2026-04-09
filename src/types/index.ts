@@ -85,6 +85,7 @@ export interface Settings {
   customSubstitutions: Record<string, string>;  // Custom word mappings
   // Subtitle display settings
   showUpcomingCues: boolean;   // Show upcoming cues preview
+  showProfanityOnly: boolean;  // Only show cues that contain profanity
   upcomingCuesCount: number;   // Number of upcoming cues to show (0-3)
   fontSize: 'small' | 'medium' | 'large' | 'xlarge';
   fontColor: string;           // Hex color for subtitle text

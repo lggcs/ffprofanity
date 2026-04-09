@@ -2010,6 +2010,7 @@ function handleStorageChange(
       oldSettings.position !== settings.position ||
       oldSettings.backgroundOpacity !== settings.backgroundOpacity ||
       oldSettings.showUpcomingCues !== settings.showUpcomingCues ||
+      oldSettings.showProfanityOnly !== settings.showProfanityOnly ||
       oldSettings.upcomingCuesCount !== settings.upcomingCuesCount
     ) {
       applyDisplaySettings();
@@ -2682,7 +2683,7 @@ function updatePlayback(currentTimeMs: number): void {
   }
 
   // Update overlay
-  if (currentCue) {
+  if (currentCue && !(settings.showProfanityOnly && !currentCue.hasProfanity)) {
     // Sanitize text to prevent XSS - both censoredText and text need sanitization
     const rawText = currentCue.hasProfanity
       ? currentCue.censoredText

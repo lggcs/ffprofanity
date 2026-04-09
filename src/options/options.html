@@ -60,7 +60,15 @@
         </label>
         <p class="help-text">Display upcoming subtitle cues below the current one.</p>
       </div>
-      
+
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="showProfanityOnly">
+          <span>Only show profanity cues</span>
+        </label>
+        <p class="help-text">Hide subtitle cues that do not contain profanity.</p>
+      </div>
+
       <div class="form-group" id="upcomingCountGroup">
         <label for="upcomingCuesCount">Number of upcoming cues:</label>
         <select id="upcomingCuesCount">
@@ -163,18 +171,6 @@
       <div class="buttons">
         <button id="saveWordlist" class="primary">Save Wordlist</button>
         <button id="resetWordlist" class="secondary">Reset to Default</button>
-      </div>
-    </section>
-
-    <section class="section">
-      <h2>🔒 Privacy</h2>
-      <p>This extension processes all data locally in your browser. No information is sent to external servers.</p>
-      <div class="form-group">
-        <label>
-          <input type="checkbox" id="optInAutoFetch" disabled>
-          <span>Auto-fetch subtitles from OpenSubtitles (requires opt-in)</span>
-        </label>
-        <p class="help-text">This feature is not yet available.</p>
       </div>
     </section>
 
