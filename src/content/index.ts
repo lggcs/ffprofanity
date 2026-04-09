@@ -6,7 +6,6 @@
 import { log, debug, warn, error } from "../lib/logger";
 import { storage } from "../lib/storage";
 import { parseSubtitle, sanitizeText, ParseResult } from "../lib/parser";
-import { escapeHtml } from "../lib/dom";
 import {
   ProfanityDetector,
   createDetector,
@@ -1392,13 +1391,27 @@ function showNotification(
     content = message;
   }
 
-  notificationEl.innerHTML = `
-    <div class="ffprofanity-notification-content">
-      <span class="ffprofanity-notification-icon">${type === "success" ? "✓" : type === "error" ? "✗" : "ℹ"}</span>
-      <span class="ffprofanity-notification-text">${escapeHtml(content)}</span>
-      ${autoSelected ? `<button class="ffprofanity-notification-change">Change</button>` : ""}
-    </div>
-  `;
+  const notifContent = document.createElement("div");
+  notifContent.className = "ffprofanity-notification-content";
+
+  const iconSpan = document.createElement("span");
+  iconSpan.className = "ffprofanity-notification-icon";
+  iconSpan.textContent = type === "success" ? "✓" : type === "error" ? "✗" : "ℹ";
+  notifContent.appendChild(iconSpan);
+
+  const textSpan = document.createElement("span");
+  textSpan.className = "ffprofanity-notification-text";
+  textSpan.textContent = content;
+  notifContent.appendChild(textSpan);
+
+  if (autoSelected) {
+    const changeBtn = document.createElement("button");
+    changeBtn.className = "ffprofanity-notification-change";
+    changeBtn.textContent = "Change";
+    notifContent.appendChild(changeBtn);
+  }
+
+  notificationEl.replaceChildren(notifContent);
 
   overlayContainer.appendChild(notificationEl);
 
@@ -1726,8 +1739,9 @@ function createOverlay(): void {
   overlayContainer = document.createElement("div");
   overlayContainer.id = "ffprofanity-overlay";
   overlayContainer.className = "ffprofanity-overlay";
-  overlayContainer.innerHTML = `
-    <style>
+
+  const overlayStyle = document.createElement("style");
+  overlayStyle.textContent = `
       .ffprofanity-overlay {
         position: fixed;
         left: 50%;
@@ -1822,8 +1836,8 @@ function createOverlay(): void {
         from { transform: translateX(0); opacity: 1; }
         to { transform: translateX(100%); opacity: 0; }
       }
-    </style>
-  `;
+    `;
+  overlayContainer.appendChild(overlayStyle);
 
   currentCueEl = document.createElement("div");
   currentCueEl.className = "ffprofanity-cue";
@@ -2709,21 +2723,21 @@ function updatePlayback(currentTimeMs: number): void {
         settings.offsetMs,
       );
       if (nextCues.length > 0) {
-        const previews = nextCues
-          .map((c) => {
-            const time = formatTime(c.startMs);
-            // Sanitize text to prevent XSS - censoredText from detector is not HTML-escaped
-            const rawText = c.hasProfanity ? c.censoredText : c.text;
-            const text = sanitizeText(rawText);
-            return `<div class="ffprofanity-preview">${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}</div>`;
-          })
-          .join("");
-        nextCuesEl.innerHTML = previews;
+        nextCuesEl.replaceChildren();
+        for (const c of nextCues) {
+          const time = formatTime(c.startMs);
+          const rawText = c.hasProfanity ? c.censoredText : c.text;
+          const text = sanitizeText(rawText);
+          const preview = document.createElement("div");
+          preview.className = "ffprofanity-preview";
+          preview.textContent = `${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`;
+          nextCuesEl.appendChild(preview);
+        }
       } else {
-        nextCuesEl.innerHTML = "";
+        nextCuesEl.replaceChildren();
       }
     } else if (nextCuesEl) {
-      nextCuesEl.innerHTML = "";
+      nextCuesEl.replaceChildren();
     }
   } else {
     currentCueEl.classList.add("ffprofanity-hidden");

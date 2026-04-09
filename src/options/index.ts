@@ -5,7 +5,6 @@
 
 import '../styles/options.css';
 import { storage } from '../lib/storage';
-import { escapeHtml } from '../lib/dom';
 import type { Settings } from '../types';
 
 // DOM Elements - will be initialized in init()
@@ -381,20 +380,25 @@ function updatePreview(): void {
 
   const categoryExamples = examples[category] || examples.silly;
   if (categoryExamples.length === 0) {
-    previewTextEl.innerHTML = `<em>No custom substitutions defined. Add some above!</em>`;
+    previewTextEl.textContent = "No custom substitutions defined. Add some above!";
     return;
   }
 
-  // Build preview HTML — escape all dynamic values to prevent XSS
-  const previewWords = categoryExamples.slice(0, 3);
-  const previewHtml = previewWords
-    .map(e => `${escapeHtml(e.display)} → <b>${escapeHtml(e.censored)}</b>`)
-    .join('<br>');
+  // Build preview using DOM APIs to avoid innerHTML
+  previewTextEl.replaceChildren();
 
-  previewTextEl.innerHTML = `
-    <strong>Category: ${escapeHtml(category.charAt(0).toUpperCase() + category.slice(1))}</strong><br>
-    ${previewHtml}
-  `;
+  const catLabel = document.createElement("strong");
+  catLabel.textContent = `Category: ${category.charAt(0).toUpperCase() + category.slice(1)}`;
+  previewTextEl.appendChild(catLabel);
+
+  const previewWords = categoryExamples.slice(0, 3);
+  previewWords.forEach((e, i) => {
+    if (i > 0) previewTextEl.appendChild(document.createElement("br"));
+    previewTextEl.appendChild(document.createTextNode(`${e.display} → `));
+    const b = document.createElement("b");
+    b.textContent = e.censored;
+    previewTextEl.appendChild(b);
+  });
 }
 
 async function handleFileUpload(): Promise<void> {

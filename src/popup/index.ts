@@ -406,7 +406,7 @@ function toggleTrackList(): void {
 }
 
 function renderTrackOptions(): void {
-  trackOptions.innerHTML = "";
+  trackOptions.replaceChildren();
 
   for (const track of detectedTracks) {
     const item = document.createElement("div");
