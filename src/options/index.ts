@@ -15,6 +15,7 @@ let fileInput: HTMLInputElement;
 let unloadCuesBtn: HTMLButtonElement;
 let wordlistTextarea: HTMLTextAreaElement;
 let saveWordlistBtn: HTMLButtonElement;
+let resetWordlistBtn: HTMLButtonElement;
 let fileInfo: HTMLDivElement;
 let statusEl: HTMLDivElement;
 // Substitution elements
@@ -55,6 +56,7 @@ async function init(): Promise<void> {
   unloadCuesBtn = document.getElementById('unloadCues') as HTMLButtonElement;
   wordlistTextarea = document.getElementById('wordlist') as HTMLTextAreaElement;
   saveWordlistBtn = document.getElementById('saveWordlist') as HTMLButtonElement;
+  resetWordlistBtn = document.getElementById('resetWordlist') as HTMLButtonElement;
   fileInfo = document.getElementById('fileInfo') as HTMLDivElement;
   statusEl = document.getElementById('status') as HTMLDivElement;
   // Substitution elements
@@ -90,6 +92,7 @@ async function init(): Promise<void> {
   fileInput.addEventListener('change', handleFileUpload);
   unloadCuesBtn.addEventListener('click', handleUnloadCues);
   saveWordlistBtn.addEventListener('click', handleSaveWordlist);
+  resetWordlistBtn.addEventListener('click', handleResetWordlist);
   sensitivitySelect.addEventListener('change', () => autoSaveSettings());
   document.getElementById('save')?.addEventListener('click', saveAllSettings);
   document.getElementById('reset')?.addEventListener('click', resetSettings);
@@ -480,6 +483,12 @@ async function handleSaveWordlist(): Promise<void> {
 
   await storage.setSetting('wordlist', wordlist);
   showStatus(`Wordlist saved: ${wordlist.length} words`, 'success');
+}
+
+async function handleResetWordlist(): Promise<void> {
+  await storage.setSetting('wordlist', []);
+  wordlistTextarea.value = '';
+  showStatus('Wordlist reset to default', 'info');
 }
 
 async function saveAllSettings(): Promise<void> {
