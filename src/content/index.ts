@@ -59,6 +59,9 @@ let playbackRate: number = 1.0; // Track playback speed
 let isMuted: boolean = false; // Track mute state to avoid redundant messages
 let originalVolume: number | null = null; // Store original volume before muting (for mobile fallback)
 
+// When true, a user-uploaded subtitle file is active and auto-detection should be suppressed
+let userUploadActive = false;
+
 // Track last known good time to ignore hover preview seeks
 let lastStableTimeMs: number = 0;
 let pendingSeekTimeMs: number | null = null;
@@ -455,6 +458,21 @@ function injectApiInterceptor(): void {
  */
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
+
+  // When a user-uploaded subtitle file is active, suppress auto-detected content
+  // to prevent accumulation of detected cues alongside user-provided ones
+  if (userUploadActive) {
+    // Still log for debugging but skip processing
+    const msgType = event.data?.type;
+    if (msgType === "FFPROFANITY_SUBTITLES_DETECTED" ||
+        msgType === "FFPROFANITY_SUBTITLE_CONTENT" ||
+        msgType === "FFPROFANITY_SUBTITLE_CAPTURED") {
+      debug(`Suppressing auto-detected subtitle (${msgType}) because user upload is active`);
+    }
+    // Allow FFPROFANITY_SUBTITLE_CUE through only if not from user upload context
+    // TextTrack cues from HLS.js (PlutoTV) should also be suppressed
+    return;
+  }
 
   // Handle individual cues from textTracks (HLS.js timed cues)
   if (event.data?.type === "FFPROFANITY_SUBTITLE_CUE") {
@@ -1216,10 +1234,36 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     detectedTracks.push(...newTracks);
   }
 
-  // Handle track selection
+  // When a user upload is active, don't auto-select or force-select detected tracks
+  // Store them for later use but don't switch away from user-provided content
+  if (userUploadActive && !forceSelection) {
+    log(`User upload active - stored ${newTracks.length} detected tracks but not auto-selecting`);
+    // Notify popup of new tracks
+    browser.runtime
+      .sendMessage({
+        type: "tracksUpdated",
+        tracks: detectedTracks,
+        currentTrack,
+      })
+      .catch(() => {});
+    return;
+  }
+
   if (forceSelection && tracks.length > 0) {
-    // User explicitly selected a new track - switch to it
-    // Find the track from our list (works for both new and existing tracks)
+    // User explicitly selected a new track (non-user-upload) - switch to it
+    // But if a user upload is active, don't override it with force selections from extractors
+    if (userUploadActive) {
+      log(`User upload active - ignoring forced track selection for: ${tracks[0]?.label}`);
+      browser.runtime
+        .sendMessage({
+          type: "tracksUpdated",
+          tracks: detectedTracks,
+          currentTrack,
+        })
+        .catch(() => {});
+      return;
+    }
+
     const trackToSelect = tracks[0];
     const existingTrack = detectedTracks.find(
       (t) => t.url === trackToSelect.url || t.id === trackToSelect.id,
@@ -1254,11 +1298,16 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     );
 
     if (!isHlsManifestSource) {
-      const selection = selectBestTrack(detectedTracks, settings);
+      // Respect the autoSelectTrack setting - if disabled, only detect but don't auto-select
+      if (!settings.autoSelectTrack) {
+        log(`Auto-select disabled - detected ${detectedTracks.length} tracks but not auto-selecting`);
+      } else {
+        const selection = selectBestTrack(detectedTracks, settings);
 
-      if (selection.track && selection.autoSelected) {
-        selectTrack(selection.track);
-        showNotification("success", "", true);
+        if (selection.track && selection.autoSelected) {
+          selectTrack(selection.track);
+          showNotification("success", "", true);
+        }
       }
     }
   }
@@ -2060,6 +2109,10 @@ function handleMessage(message: unknown): Promise<unknown> {
       handleSubtitleUpload(content, filename);
       break;
 
+    case "unloadCues":
+      handleSubtitleUnload();
+      break;
+
     case "updateOffset":
       const offset = msg.offsetMs as number;
       if (typeof offset === "number") {
@@ -2097,6 +2150,7 @@ function handleMessage(message: unknown): Promise<unknown> {
         hasVideo: !!videoElement,
         currentTrack,
         detectedTracks,
+        userUploadActive,
       });
 
     case "trackDetected":
@@ -2111,6 +2165,11 @@ function handleMessage(message: unknown): Promise<unknown> {
       if (msg.trackId) {
         const track = detectedTracks.find((t) => t.id === msg.trackId);
         if (track) {
+          // If switching away from a user upload, clear the flag to re-enable auto-detection
+          if (userUploadActive && track.source !== 'user') {
+            userUploadActive = false;
+            log("Switched away from user upload, re-enabling auto-detection");
+          }
           selectTrack(track);
         }
       }
@@ -2122,6 +2181,7 @@ function handleMessage(message: unknown): Promise<unknown> {
         type: "tracks",
         tracks: detectedTracks,
         currentTrack,
+        userUploadActive,
       });
   }
 
@@ -2192,9 +2252,52 @@ async function handleSubtitleUpload(
   }
   currentTrack = userTrack;
 
+  // Mark user upload as active to suppress auto-detection
+  userUploadActive = true;
+  log(`User upload active: suppressing auto-detection until unload`);
+
   log(
     `Created track for uploaded file: ${userTrack.label}`,
   );
+}
+
+/**
+ * Handle unloading a user-uploaded subtitle file
+ * Clears cues, resets track state, and re-enables auto-detection
+ */
+function handleSubtitleUnload(): void {
+  log("Unloading user subtitle file, re-enabling auto-detection");
+
+  // Clear all cues
+  cues = [];
+  cueIndex.build(cues);
+
+  // Reset current track
+  currentTrack = null;
+
+  // Remove user-uploaded tracks from detected tracks list
+  detectedTracks = detectedTracks.filter(t => t.source !== 'user' && !t.id.startsWith('user-upload-'));
+
+  // Clear the user upload active flag to re-enable auto-detection
+  userUploadActive = false;
+
+  // Reset profanity state
+  currentProfanityCue = null;
+  currentProfanityWindow = null;
+  if (isMuted) {
+    sendUnmuteNow();
+  }
+
+  // Clear stored cues
+  storage.clearCues();
+
+  // Show notification
+  showNotification("info", "Subtitle file unloaded. Auto-detection re-enabled.");
+
+  // Re-scan for tracks now that auto-detection is re-enabled
+  scanForTracks();
+
+  log("User subtitle file unloaded, auto-detection re-enabled");
 }
 
 /**
@@ -2253,9 +2356,12 @@ function processCues(newCues: Cue[]): void {
   const isPlutoTVSource = firstCueSource.includes('plutotv');
   // User explicitly selected a different subtitle track - replace cues entirely
   // This handles both page-script sources and track.source values
+  // user-upload also replaces because a user-uploaded file should fully replace any
+  // auto-detected content, not accumulate alongside it
   const isUserSelection = firstCueSource === 'lookmovie.user-subtitle-selected' ||
                           firstCueSource === 'lookmovie.auto-selected' ||
                           firstCueSource === 'user-selection' ||
+                          firstCueSource === 'user-upload' ||
                           firstCueSource.includes('user-subtitle');
 
   if (isUserSelection && cues.length > 0) {

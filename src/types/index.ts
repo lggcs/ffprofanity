@@ -116,7 +116,15 @@ export type MessageType =
   | 'muted'
   | 'updateOffset'
   | 'status'
-  | 'error';
+  | 'error'
+  | 'uploadCues'
+  | 'unloadCues'
+  | 'selectTrack'
+  | 'getTracks'
+  | 'trackDetected'
+  | 'enable'
+  | 'disable'
+  | 'updateSettings';
 
 export interface Message {
   type: MessageType;

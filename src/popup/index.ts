@@ -12,6 +12,8 @@ let isActive = false;
 let currentTrack: SubtitleTrack | null = null;
 let detectedTracks: SubtitleTrack[] = [];
 let settings: Partial<Settings> = {};
+// Whether a user-uploaded subtitle file is currently active
+let isUserUploadActive = false;
 
 // DOM Elements - initialized in init()
 let statusEl: HTMLElement;
@@ -47,12 +49,14 @@ function setupEventHandlers(): void {
   const toggleBtn = document.getElementById("toggle") as HTMLButtonElement;
   const optionsBtn = document.getElementById("options") as HTMLButtonElement;
   const changeTrackBtn = document.getElementById("changeTrackBtn") as HTMLButtonElement;
+  const unloadBtn = document.getElementById("unloadBtn") as HTMLButtonElement;
   const subtitleFileInput = document.getElementById("subtitleFile") as HTMLInputElement;
   const openFullOptions = document.getElementById("openFullOptions") as HTMLAnchorElement;
 
   toggleBtn.addEventListener("click", handleToggle);
   optionsBtn.addEventListener("click", showSettingsView);
   changeTrackBtn.addEventListener("click", toggleTrackList);
+  unloadBtn.addEventListener("click", handleUnload);
   subtitleFileInput.addEventListener("change", handleFileUpload);
   
   // Full options link opens in new tab
@@ -297,11 +301,13 @@ async function loadStatus(): Promise<void> {
         hasVideo: boolean;
         currentTrack: SubtitleTrack | null;
         detectedTracks: SubtitleTrack[];
+        userUploadActive?: boolean;
       };
 
       isActive = response.active;
       currentTrack = response.currentTrack || null;
       detectedTracks = response.detectedTracks || [];
+      isUserUploadActive = response.userUploadActive || (currentTrack?.source === 'user') || false;
 
       updateStatus(response);
       updateTrackSection();
@@ -316,11 +322,13 @@ async function loadStatus(): Promise<void> {
           hasVideo: boolean;
           currentTrack: SubtitleTrack | null;
           detectedTracks: SubtitleTrack[];
+          userUploadActive?: boolean;
         };
 
         isActive = response.active;
         currentTrack = response.currentTrack || null;
         detectedTracks = response.detectedTracks || [];
+        isUserUploadActive = response.userUploadActive || (currentTrack?.source === 'user') || false;
 
         updateStatus(response);
         updateTrackSection();
@@ -381,6 +389,8 @@ function updateStatus(status: {
 }
 
 function updateTrackSection(): void {
+  const unloadBtn = document.getElementById("unloadBtn") as HTMLButtonElement;
+
   if (detectedTracks.length > 0 || currentTrack) {
     trackSection.classList.remove("hidden");
 
@@ -394,6 +404,11 @@ function updateTrackSection(): void {
     }
   } else {
     trackSection.classList.add("hidden");
+  }
+
+  // Show unload button only when a user upload is active
+  if (unloadBtn) {
+    unloadBtn.style.display = isUserUploadActive ? "inline-block" : "none";
   }
 }
 
@@ -491,6 +506,7 @@ async function handleFileUpload(event: Event): Promise<void> {
         content,
         filename: file.name,
       });
+      isUserUploadActive = true;
       trackList.classList.add("hidden");
       await loadStatus();
     } catch (err) {
@@ -498,6 +514,23 @@ async function handleFileUpload(event: Event): Promise<void> {
     }
   };
   reader.readAsText(file);
+}
+
+async function handleUnload(): Promise<void> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const tabId = tab.id;
+  if (!tabId) return;
+
+  try {
+    await browser.tabs.sendMessage(tabId, {
+      type: "unloadCues",
+    });
+    isUserUploadActive = false;
+    currentTrack = null;
+    await loadStatus();
+  } catch (err) {
+    error("Failed to unload cues:", err);
+  }
 }
 
 // Initialize on DOM ready

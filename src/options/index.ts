@@ -12,6 +12,7 @@ let offsetSlider: HTMLInputElement;
 let offsetValue: HTMLSpanElement;
 let sensitivitySelect: HTMLSelectElement;
 let fileInput: HTMLInputElement;
+let unloadCuesBtn: HTMLButtonElement;
 let wordlistTextarea: HTMLTextAreaElement;
 let saveWordlistBtn: HTMLButtonElement;
 let fileInfo: HTMLDivElement;
@@ -42,6 +43,8 @@ let previewUpcoming: HTMLDivElement;
 
 // Current cues
 let cueCount = 0;
+// Whether a user-uploaded subtitle file is currently active
+let isUserUploadActive = false;
 
 async function init(): Promise<void> {
   // Get DOM elements
@@ -49,6 +52,7 @@ async function init(): Promise<void> {
   offsetValue = document.getElementById('offsetValue') as HTMLSpanElement;
   sensitivitySelect = document.getElementById('sensitivity') as HTMLSelectElement;
   fileInput = document.getElementById('fileInput') as HTMLInputElement;
+  unloadCuesBtn = document.getElementById('unloadCues') as HTMLButtonElement;
   wordlistTextarea = document.getElementById('wordlist') as HTMLTextAreaElement;
   saveWordlistBtn = document.getElementById('saveWordlist') as HTMLButtonElement;
   fileInfo = document.getElementById('fileInfo') as HTMLDivElement;
@@ -84,6 +88,7 @@ async function init(): Promise<void> {
   // Setup event handlers
   offsetSlider.addEventListener('input', handleOffsetChange);
   fileInput.addEventListener('change', handleFileUpload);
+  unloadCuesBtn.addEventListener('click', handleUnloadCues);
   saveWordlistBtn.addEventListener('click', handleSaveWordlist);
   sensitivitySelect.addEventListener('change', () => autoSaveSettings());
   document.getElementById('save')?.addEventListener('click', saveAllSettings);
@@ -404,14 +409,14 @@ function updatePreview(): void {
 async function handleFileUpload(): Promise<void> {
   const file = fileInput.files?.[0];
   if (!file) return;
-  
+
   showStatus('Processing subtitle file...', 'info');
-  
+
   const reader = new FileReader();
   reader.onload = async (e) => {
     try {
       const content = e.target?.result as string;
-      
+
       // Send to content script
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (tab.id) {
@@ -419,7 +424,8 @@ async function handleFileUpload(): Promise<void> {
           type: 'uploadCues',
           content,
         });
-        
+
+        isUserUploadActive = true;
         showStatus(`File "${file.name}" processed successfully!`, 'success');
         const cues = await storage.getCues();
         cueCount = cues.length;
@@ -429,8 +435,26 @@ async function handleFileUpload(): Promise<void> {
       showStatus(`Error processing file: ${error}`, 'error');
     }
   };
-  
+
   reader.readAsText(file);
+}
+
+async function handleUnloadCues(): Promise<void> {
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tab.id) {
+      await browser.tabs.sendMessage(tab.id, {
+        type: 'unloadCues',
+      });
+
+      isUserUploadActive = false;
+      cueCount = 0;
+      showStatus('Subtitle file unloaded. Auto-detection re-enabled.', 'info');
+      updateFileInfo();
+    }
+  } catch (error) {
+    showStatus(`Error unloading: ${error}`, 'error');
+  }
 }
 
 function updateFileInfo(): void {
@@ -440,6 +464,11 @@ function updateFileInfo(): void {
   } else {
     fileInfo.textContent = 'No cues loaded';
     fileInfo.style.color = '#888';
+  }
+
+  // Show unload button only when a user upload is active
+  if (unloadCuesBtn) {
+    unloadCuesBtn.style.display = isUserUploadActive ? 'inline-block' : 'none';
   }
 }
 

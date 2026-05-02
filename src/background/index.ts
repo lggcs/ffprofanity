@@ -48,6 +48,7 @@ const tabStatus = new Map<
     currentTrack: SubtitleTrack | null;
     detectedTracks: SubtitleTrack[];
     lastUpdated: number;
+    userUploadActive: boolean;
   }
 >();
 
@@ -139,12 +140,14 @@ async function getAggregatedStatus(tabId: number): Promise<{
   hasVideo: boolean;
   currentTrack: SubtitleTrack | null;
   detectedTracks: SubtitleTrack[];
+  userUploadActive: boolean;
 }> {
   let hasVideo = false;
   let active = false;
   let totalCues = 0;
   let totalProfanity = 0;
   let currentTrack: SubtitleTrack | null = null;
+  let userUploadActive = false;
   const allTracks: SubtitleTrack[] = [];
 
   try {
@@ -197,6 +200,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
         hasVideo?: boolean;
         currentTrack?: SubtitleTrack | null;
         detectedTracks?: SubtitleTrack[];
+        userUploadActive?: boolean;
       };
 
       if (s.hasVideo) hasVideo = true;
@@ -206,6 +210,8 @@ async function getAggregatedStatus(tabId: number): Promise<{
         totalProfanity = Math.max(totalProfanity, s.profanityCount);
       // Take currentTrack from first frame that has one (main frame comes first due to sort)
       if (s.currentTrack && !currentTrack) currentTrack = s.currentTrack;
+      // If any frame has a user upload active, consider it active for the tab
+      if (s.userUploadActive) userUploadActive = true;
       if (s.detectedTracks) {
         for (const track of s.detectedTracks) {
           if (
@@ -232,6 +238,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
       currentTrack,
       detectedTracks: allTracks,
       lastUpdated: Date.now(),
+      userUploadActive,
     });
   }
 
@@ -242,6 +249,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
     hasVideo,
     currentTrack,
     detectedTracks: allTracks,
+    userUploadActive,
   };
 }
 
@@ -298,6 +306,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
         profanityCount: number;
         currentTrack: SubtitleTrack | null;
         detectedTracks: SubtitleTrack[];
+        userUploadActive?: boolean;
       };
 
       // Update cached status for this tab
@@ -306,9 +315,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
         active: false,
         cueCount: 0,
         profanityCount: 0,
-        currentTrack: null,
-        detectedTracks: [],
+        currentTrack: null as SubtitleTrack | null,
+        detectedTracks: [] as SubtitleTrack[],
         lastUpdated: 0,
+        userUploadActive: false,
       };
 
       // Merge status (any frame with video means tab has video)
@@ -331,6 +341,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
           ),
         ],
         lastUpdated: Date.now(),
+        userUploadActive: existing.userUploadActive || (frameStatus.userUploadActive || false),
       });
 
       return Promise.resolve({ success: true });
