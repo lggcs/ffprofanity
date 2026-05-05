@@ -112,8 +112,12 @@ async function init(): Promise<void> {
   // Export/Import buttons
   document.getElementById('exportData')?.addEventListener('click', exportData);
   const importInput = document.getElementById('importData') as HTMLInputElement;
+  const importBtn = document.getElementById('importBtn') as HTMLButtonElement;
   if (importInput) {
     importInput.addEventListener('change', handleImport);
+  }
+  if (importBtn && importInput) {
+    importBtn.addEventListener('click', () => importInput.click());
   }
 }
 
@@ -390,6 +394,8 @@ function updatePreview(): void {
   const catLabel = document.createElement("strong");
   catLabel.textContent = `Category: ${category.charAt(0).toUpperCase() + category.slice(1)}`;
   previewTextEl.appendChild(catLabel);
+  previewTextEl.appendChild(document.createElement("br"));
+  previewTextEl.appendChild(document.createElement("br"));
 
   const previewWords = categoryExamples.slice(0, 3);
   previewWords.forEach((e, i) => {
