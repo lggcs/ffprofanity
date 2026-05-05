@@ -32,6 +32,14 @@ export default defineConfig({
           __dirname,
           "src/page-scripts/jellyfin-injected.ts",
         ),
+        "page-scripts/cinebto": resolve(
+          __dirname,
+          "src/page-scripts/cinebto-injected.ts",
+        ),
+        "page-scripts/2embed": resolve(
+          __dirname,
+          "src/page-scripts/2embed-injected.ts",
+        ),
       },
       output: {
         entryFileNames: (chunkInfo) => {

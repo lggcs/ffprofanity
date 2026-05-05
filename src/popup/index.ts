@@ -9,6 +9,7 @@ import { error } from '../lib/logger';
 
 // State
 let isActive = false;
+let hasVideo = false;
 let currentTrack: SubtitleTrack | null = null;
 let detectedTracks: SubtitleTrack[] = [];
 let settings: Partial<Settings> = {};
@@ -55,7 +56,7 @@ function setupEventHandlers(): void {
 
   toggleBtn.addEventListener("click", handleToggle);
   optionsBtn.addEventListener("click", showSettingsView);
-  changeTrackBtn.addEventListener("click", toggleTrackList);
+  changeTrackBtn.addEventListener("click", handleChangeOrUpload);
   unloadBtn.addEventListener("click", handleUnload);
   uploadBtn.addEventListener("click", handleUploadClick);
   
@@ -335,7 +336,7 @@ async function loadStatus(): Promise<void> {
       } catch {
         // Content script not loaded or doesn't support this
         updateStatus({ active: false, cueCount: 0, hasVideo: false });
-        trackSection.classList.add("hidden");
+        updateTrackSection();
       }
     }
   } catch (err) {
@@ -361,37 +362,46 @@ function updateStatus(status: {
   ) as HTMLElement;
 
   if (!status.hasVideo) {
+    hasVideo = false;
     statusIndicator.className = "status-indicator status-warning";
     statusText.textContent = "No video detected";
     toggleBtn.disabled = true;
     statsSection.classList.add("hidden");
-  } else if (status.active) {
-    statusIndicator.className = "status-indicator status-active";
-    statusText.textContent = "Active";
-    toggleBtn.textContent = "Disable";
-    toggleBtn.disabled = false;
+  } else {
+    hasVideo = true;
+    if (status.active) {
+      statusIndicator.className = "status-indicator status-active";
+      statusText.textContent = "Active";
+      toggleBtn.textContent = "Disable";
+      toggleBtn.disabled = false;
 
-    // Show stats
-    if (status.cueCount > 0) {
-      statsSection.classList.remove("hidden");
-      totalCuesEl.textContent = status.cueCount.toString();
-      profanityCountEl.textContent = (status.profanityCount || 0).toString();
+      // Show stats
+      if (status.cueCount > 0) {
+        statsSection.classList.remove("hidden");
+        totalCuesEl.textContent = status.cueCount.toString();
+        profanityCountEl.textContent = (status.profanityCount || 0).toString();
+      } else {
+        statsSection.classList.add("hidden");
+      }
     } else {
+      statusIndicator.className = "status-indicator status-inactive";
+      statusText.textContent = "Disabled";
+      toggleBtn.textContent = "Enable";
+      toggleBtn.disabled = false;
       statsSection.classList.add("hidden");
     }
-  } else {
-    statusIndicator.className = "status-indicator status-inactive";
-    statusText.textContent = "Disabled";
-    toggleBtn.textContent = "Enable";
-    toggleBtn.disabled = false;
-    statsSection.classList.add("hidden");
   }
 }
 
 function updateTrackSection(): void {
   const unloadBtn = document.getElementById("unloadBtn") as HTMLButtonElement;
+  const changeTrackBtn = document.getElementById("changeTrackBtn") as HTMLButtonElement;
 
-  if (detectedTracks.length > 0 || currentTrack) {
+  // Show track section when a video is detected, even if no tracks were found.
+  // This ensures the upload button is always accessible when the user might
+  // want to manually upload subtitles (e.g. on streaming sites where auto-
+  // detection found nothing).
+  if (hasVideo || detectedTracks.length > 0 || currentTrack) {
     trackSection.classList.remove("hidden");
 
     if (currentTrack) {
@@ -399,8 +409,16 @@ function updateTrackSection(): void {
         ? `${currentTrack.label} ★`
         : currentTrack.label;
       currentTrackName.textContent = label;
+    } else if (detectedTracks.length === 0) {
+      currentTrackName.textContent = "No subtitles detected";
     } else {
       currentTrackName.textContent = "None selected";
+    }
+
+    // Change button label based on context: "Upload" when no tracks detected,
+    // "Change" when there are tracks to choose from
+    if (changeTrackBtn) {
+      changeTrackBtn.textContent = detectedTracks.length === 0 && !currentTrack ? "Upload" : "Change";
     }
   } else {
     trackSection.classList.add("hidden");
@@ -417,6 +435,15 @@ function toggleTrackList(): void {
 
   if (!trackList.classList.contains("hidden")) {
     renderTrackOptions();
+  }
+}
+
+/** When no tracks are detected, go straight to upload overlay instead of track list */
+function handleChangeOrUpload(): void {
+  if (detectedTracks.length === 0 && !currentTrack) {
+    handleUploadClick();
+  } else {
+    toggleTrackList();
   }
 }
 
