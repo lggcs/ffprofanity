@@ -307,6 +307,35 @@ input[type="file"]::file-selector-button:hover {
   background: var(--secondary-color);
 }
 
+/* Table styling (privacy page) */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+th, td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  font-weight: 600;
+  background: rgba(74, 20, 140, 0.05);
+}
+
+tr:hover {
+  background: rgba(74, 20, 140, 0.03);
+}
+
+code {
+  background: rgba(74, 20, 140, 0.08);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
 /* Color input group */
 .color-input-group {
   display: flex;
