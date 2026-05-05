@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: Settings = {
   backgroundOpacity: 80,
 };
 
-type StorageKey = 'cues_v1' | 'settings' | 'presets' | 'detectedTracks' | 'currentTrack';
+type StorageKey = 'cues_v1' | 'settings' | 'presets' | 'detectedTracks' | 'currentTrack' | 'userUploadActive' | 'userUploadTrack';
 
 export class StorageManager {
   /**
@@ -186,6 +186,59 @@ export class StorageManager {
       this.setDetectedTracks(data.detectedTracks || []),
       this.setCurrentTrack(data.currentTrack || null),
     ]);
+  }
+
+  /**
+   * Check if a user-uploaded subtitle file is active in this tab
+   * Used to restore state after content script reinjection
+   */
+  async getUserUploadActive(tabId?: number): Promise<boolean> {
+    const key = tabId ? `userUploadActive_${tabId}` : 'userUploadActive';
+    const result = await browser.storage.local.get(key);
+    return result[key] || false;
+  }
+
+  /**
+   * Set the user upload active flag
+   */
+  async setUserUploadActive(active: boolean, tabId?: number): Promise<void> {
+    const key = tabId ? `userUploadActive_${tabId}` : 'userUploadActive';
+    if (active) {
+      await browser.storage.local.set({ [key]: true });
+    } else {
+      await browser.storage.local.remove(key);
+    }
+  }
+
+  /**
+   * Get the user upload track metadata (for restore after reinjection)
+   */
+  async getUserUploadTrack(tabId?: number): Promise<SubtitleTrack | null> {
+    const key = tabId ? `userUploadTrack_${tabId}` : 'userUploadTrack';
+    const result = await browser.storage.local.get(key);
+    return result[key] || null;
+  }
+
+  /**
+   * Save the user upload track metadata
+   */
+  async setUserUploadTrack(track: SubtitleTrack | null, tabId?: number): Promise<void> {
+    const key = tabId ? `userUploadTrack_${tabId}` : 'userUploadTrack';
+    if (track) {
+      await browser.storage.local.set({ [key]: track });
+    } else {
+      await browser.storage.local.remove(key);
+    }
+  }
+
+  /**
+   * Clear all user upload state (on unload)
+   */
+  async clearUserUploadState(tabId?: number): Promise<void> {
+    const keys = tabId
+      ? [`userUploadActive_${tabId}`, `userUploadTrack_${tabId}`, 'cues_v1']
+      : ['userUploadActive', 'userUploadTrack', 'cues_v1'];
+    await browser.storage.local.remove(keys);
   }
 }
 

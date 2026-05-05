@@ -594,6 +594,13 @@ export class ProfanityDetector {
       return this.customSubstitutions.get(normalized) || null;
     }
 
+    // Monkey fast-path: every profane word maps to a random monkey emoji
+    // No need to look up the substitution map since all entries are identical
+    if (this.substitutionCategory === 'monkeys') {
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'] as const;
+      return MONKEY_EMOJIS[Math.floor(Math.random() * MONKEY_EMOJIS.length)];
+    }
+
     // Check default substitution map
     const mapping = this.substitutionMap.get(normalized);
     if (!mapping) return null;
@@ -603,7 +610,7 @@ export class ProfanityDetector {
     const category = validCategories.includes(this.substitutionCategory as typeof validCategories[number])
       ? this.substitutionCategory as typeof validCategories[number]
       : 'silly';
-    
+
     const categoryOptions = mapping.substitutions[category];
     if (!categoryOptions || categoryOptions.length === 0) {
       // Fall back to silly category if current category is empty

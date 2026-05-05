@@ -124,7 +124,8 @@ export type MessageType =
   | 'trackDetected'
   | 'enable'
   | 'disable'
-  | 'updateSettings';
+  | 'updateSettings'
+  ;
 
 export interface Message {
   type: MessageType;

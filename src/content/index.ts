@@ -101,6 +101,13 @@ let textTracksProcessTimer: ReturnType<typeof setInterval> | null = null;
 function processTextTracksCues(): void {
   if (textTracksCues.length === 0) return;
 
+  // When a user upload is active, suppress auto-detected content
+  if (userUploadActive) {
+    debug(`Suppressing ${textTracksCues.length} textTracks cues because user upload is active`);
+    textTracksCues.length = 0;
+    return;
+  }
+
   // Take a snapshot and clear the accumulator
   const pendingCues = [...textTracksCues];
   textTracksCues.length = 0;
@@ -198,8 +205,10 @@ async function init(): Promise<void> {
   // Start the textTracks processor (for PlutoTV HLS.js timed cues)
   startTextTracksProcessor();
 
-  // Clear any old saved cues - user prefers per-session only
-  await storage.clearCues();
+  // Try to restore user-uploaded subtitles from a previous session/navigation.
+  // This handles the case where the content script is re-injected (e.g., SPA navigation)
+  // and the user's uploaded file would otherwise be lost.
+  await restoreUserUpload();
 
   // Scan for existing subtitle tracks
   await scanForTracks();
@@ -949,6 +958,12 @@ function handleSubtitleContent(
   segmentLoadTimeMs?: number,
   streamType?: string,
 ): void {
+  // When a user upload is active, reject auto-detected subtitle content
+  if (userUploadActive) {
+    debug(`handleSubtitleContent: rejecting auto-detected content (source="${source}") because user upload is active`);
+    return;
+  }
+
   // Hide native subtitles on streaming sites (prevents double display)
   hideNativeSubtitlesForSite(source);
 
@@ -1344,6 +1359,13 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
   if (track.url && processedContentUrls.has(track.url)) {
     log(`Skipping fetch for ${track.url.substring(0, 60)} - already processed`);
     currentTrack = track;
+    return;
+  }
+
+  // When a user upload is active, don't auto-select detected tracks.
+  // User must explicitly choose to switch tracks via popup.
+  if (userUploadActive && track.source !== 'user' && track.source !== 'user-upload' && track.source !== 'user-selection') {
+    log(`User upload active - not auto-selecting detected track: ${track.label} (source: ${track.source})`);
     return;
   }
 
@@ -1928,6 +1950,226 @@ function handleFullscreenChange(): void {
 }
 
 /**
+ * Create and show an upload overlay on the video page.
+ * The overlay contains a file input styled as a drop zone.
+ * When a file is selected, it reads the content and processes it
+ * as a user upload, then removes the overlay.
+ */
+function createUploadOverlay(): void {
+  // Remove existing overlay if present
+  const existing = document.getElementById("ffprofanity-upload-overlay");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "ffprofanity-upload-overlay";
+  backdrop.className = "ffprofanity-upload-backdrop";
+  backdrop.innerHTML = `
+    <div class="ffprofanity-upload-dialog">
+      <div class="ffprofanity-upload-title">Upload Subtitles</div>
+      <div class="ffprofanity-upload-desc">Choose a subtitle file (SRT, VTT, ASS/SSA)</div>
+      <div class="ffprofanity-upload-dropzone" id="ffprofanity-dropzone">
+        <div class="ffprofanity-upload-emoji">📄</div>
+        <div class="ffprofanity-upload-hint">Click to choose a file</div>
+        <input type="file" id="ffprofanity-file-input" accept=".srt,.vtt,.ass,.ssa">
+      </div>
+      <div class="ffprofanity-upload-status" id="ffprofanity-upload-status"></div>
+      <div class="ffprofanity-upload-actions">
+        <button class="ffprofanity-upload-cancel" id="ffprofanity-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  // Inject styles
+  const style = document.createElement("style");
+  style.textContent = `
+    .ffprofanity-upload-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .ffprofanity-upload-dialog {
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px 32px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      pointer-events: auto;
+    }
+    .ffprofanity-upload-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a1a1a;
+      margin-bottom: 4px;
+    }
+    .ffprofanity-upload-desc {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 20px;
+    }
+    .ffprofanity-upload-dropzone {
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .ffprofanity-upload-dropzone:hover {
+      border-color: #4a90d9;
+      background: #f0f7ff;
+    }
+    .ffprofanity-upload-dropzone.dragover {
+      border-color: #4a90d9;
+      background: #e3f0ff;
+    }
+    .ffprofanity-upload-emoji {
+      font-size: 36px;
+      margin-bottom: 8px;
+    }
+    .ffprofanity-upload-hint {
+      font-size: 14px;
+      color: #555;
+    }
+    .ffprofanity-upload-dropzone input[type="file"] {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .ffprofanity-upload-status {
+      min-height: 0;
+      font-size: 13px;
+      margin-top: 12px;
+      padding: 0;
+      border-radius: 4px;
+    }
+    .ffprofanity-upload-status.status-success {
+      background: #d4edda;
+      color: #155724;
+      padding: 8px 12px;
+    }
+    .ffprofanity-upload-status.status-error {
+      background: #f8d7da;
+      color: #721c24;
+      padding: 8px 12px;
+    }
+    .ffprofanity-upload-status.status-info {
+      background: #d1ecf1;
+      color: #0c5460;
+      padding: 8px 12px;
+    }
+    .ffprofanity-upload-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+    .ffprofanity-upload-cancel {
+      padding: 8px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background: #f5f5f5;
+      color: #333;
+    }
+    .ffprofanity-upload-cancel:hover {
+      background: #e8e8e8;
+    }
+  `;
+  backdrop.appendChild(style);
+  document.body.appendChild(backdrop);
+
+  // Event: close overlay
+  const cancelBtn = backdrop.querySelector("#ffprofanity-cancel-btn") as HTMLButtonElement;
+  cancelBtn.addEventListener("click", () => backdrop.remove());
+
+  // Clicking backdrop (outside dialog) also closes
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+
+  // File input
+  const fileInput = backdrop.querySelector("#ffprofanity-file-input") as HTMLInputElement;
+  const dropzone = backdrop.querySelector("#ffprofanity-dropzone") as HTMLDivElement;
+  const statusEl = backdrop.querySelector("#ffprofanity-upload-status") as HTMLDivElement;
+
+  // Drag-and-drop support
+  dropzone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropzone.classList.add("dragover");
+  });
+  dropzone.addEventListener("dragleave", () => {
+    dropzone.classList.remove("dragover");
+  });
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+    const file = e.dataTransfer?.files?.[0];
+    if (file) processFile(file);
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    if (file) processFile(file);
+  });
+
+  function showStatus(message: string, type: "success" | "error" | "info"): void {
+    statusEl.textContent = message;
+    statusEl.className = `ffprofanity-upload-status status-${type}`;
+  }
+
+  function processFile(file: File): void {
+    showStatus(`Reading "${file.name}"...`, "info");
+    cancelBtn.disabled = true;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        if (!content) {
+          showStatus("Error: Could not read file content.", "error");
+          cancelBtn.disabled = false;
+          return;
+        }
+
+        // Process as user upload directly — we're in the content script
+        // which has the video element
+        userUploadActive = true;
+        log("User upload active: suppressing auto-detection until unload");
+        stopMonitoring();
+        await handleSubtitleUpload(content, file.name);
+        log(`Upload overlay: upload complete, ${cues.length} cues loaded`);
+
+        showStatus(`✓ "${file.name}" loaded — ${cues.length} cues found`, "success");
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = "Close";
+
+        // Auto-close overlay after a short delay
+        setTimeout(() => backdrop.remove(), 2000);
+      } catch (err) {
+        error("Failed to process upload in overlay:", err);
+        showStatus(`Error: ${err}`, "error");
+        cancelBtn.disabled = false;
+      }
+    };
+
+    reader.onerror = () => {
+      showStatus("Error reading file. Please try again.", "error");
+      cancelBtn.disabled = false;
+    };
+
+    reader.readAsText(file);
+  }
+}
+
+/**
  * Apply display settings (font size, color, position, etc.)
  */
 function applyDisplaySettings(): void {
@@ -2097,21 +2339,60 @@ function handleStorageChange(
 /**
  * Handle messages from background and popup
  */
-function handleMessage(message: unknown): Promise<unknown> {
+async function handleMessage(message: unknown): Promise<unknown> {
   if (!message || typeof message !== "object") return Promise.resolve();
 
   const msg = message as Record<string, unknown>;
 
   switch (msg.type) {
-    case "uploadCues":
-      const content = msg.content as string;
-      const filename = msg.filename as string | undefined;
-      handleSubtitleUpload(content, filename);
+    case "uploadCues": {
+      const uploadContent = msg.content as string;
+      const uploadFilename = msg.filename as string | undefined;
+      log(`Received uploadCues message: ${uploadContent?.length || 0} bytes, filename="${uploadFilename}", hasVideo=${!!videoElement}`);
+      if (!videoElement) {
+        // This frame doesn't have the video — skip (don't relay).
+        // The popup sends to all frames and the frame with the video will handle it.
+        log(`uploadCues: no video in this frame, skipping (top frame will handle)`);
+        break;
+      }
+      // User upload: set userUploadActive BEFORE processing to immediately
+      // suppress any in-flight auto-detection
+      log(`uploadCues: processing user upload "${uploadFilename}" (${uploadContent?.length || 0} bytes)`);
+      userUploadActive = true;
+      log(`User upload active: suppressing auto-detection until unload`);
+      // Stop current monitoring before processing user upload
+      stopMonitoring();
+      // Process the upload — this will parse, run profanity detection, and start monitoring.
+      // handleSubtitleUpload will replace auto-detected cues with user cues (isUserSelection).
+      await handleSubtitleUpload(uploadContent, uploadFilename);
+      log(`uploadCues: upload complete, ${cues.length} cues loaded, userUploadActive=${userUploadActive}`);
       break;
+    }
 
-    case "unloadCues":
+    case "unloadCues": {
+      log(`Received unloadCues message, hasVideo=${!!videoElement}`);
+      if (!videoElement) {
+        // This frame doesn't have the video — skip (don't relay).
+        log(`unloadCues: no video in this frame, skipping`);
+        break;
+      }
       handleSubtitleUnload();
       break;
+    }
+
+    case "showUploadOverlay": {
+      // Show an upload overlay on the video page.
+      // This avoids the Firefox bug where the popup closes when a
+      // native file picker opens — the file input works fine on a normal page.
+      log(`Received showUploadOverlay message, hasVideo=${!!videoElement}`);
+      if (!videoElement) {
+        // This frame doesn't have the video — let the frame that does handle it.
+        log(`showUploadOverlay: no video in this frame, skipping`);
+        break;
+      }
+      createUploadOverlay();
+      break;
+    }
 
     case "updateOffset":
       const offset = msg.offsetMs as number;
@@ -2155,8 +2436,21 @@ function handleMessage(message: unknown): Promise<unknown> {
 
     case "trackDetected":
       // New track detected by background script
+      // Iframes without a video element should skip track processing —
+      // they can't display subtitles and waste resources fetching/parsing
+      if (!videoElement && msg.track) {
+        debug(`trackDetected: skipping in frame without video element (${(msg.track as SubtitleTrack).label})`);
+        break;
+      }
       if (msg.track) {
-        addDetectedTracks([msg.track as SubtitleTrack]);
+        if (userUploadActive) {
+          log(`User upload active - storing background-detected track but not selecting: ${(msg.track as SubtitleTrack).label}`);
+          // Still add to detectedTracks so popup can show it as an option,
+          // but addDetectedTracks with forceSelection=false won't auto-select
+          addDetectedTracks([msg.track as SubtitleTrack], false);
+        } else {
+          addDetectedTracks([msg.track as SubtitleTrack]);
+        }
       }
       break;
 
@@ -2196,6 +2490,15 @@ async function handleSubtitleUpload(
   filename?: string,
   source?: string,
 ): Promise<void> {
+  // When a user upload is active, reject auto-detected subtitle content.
+  // This prevents detected tracks from replacing user-provided subtitles.
+  const isUserUpload = !source || source === 'user-upload' || source === 'user-selection' || source === 'user';
+
+  if (userUploadActive && !isUserUpload) {
+    log(`handleSubtitleUpload: rejecting auto-detected content (source="${source}") because user upload is active`);
+    return;
+  }
+
   // Hide native subtitles on streaming sites (prevents double display)
   hideNativeSubtitlesForSite(source || 'user-upload');
 
@@ -2232,33 +2535,41 @@ async function handleSubtitleUpload(
   }));
   
   processCues(taggedCues);
-  // Note: cues are NOT saved to storage - per-session only
 
-  // Create a track entry for user uploads
-  const userTrack: SubtitleTrack = {
-    id: `user-upload-${Date.now()}`,
-    label: filename || "Uploaded subtitles",
-    language: "unknown",
-    isSDH: false,
-    isDefault: true,
-    source: "user",
-    embedded: false,
-    recommendScore: 10, // User uploads should be preferred
-  };
+  // isUserUpload was already determined at the top of this function
+  if (isUserUpload) {
+    // Create a track entry for user uploads
+    const userTrack: SubtitleTrack = {
+      id: `user-upload-${Date.now()}`,
+      label: filename || "Uploaded subtitles",
+      language: "unknown",
+      isSDH: false,
+      isDefault: true,
+      source: "user",
+      embedded: false,
+      recommendScore: 10, // User uploads should be preferred
+    };
 
-  // Set as current track (in-memory only)
-  if (!detectedTracks.some((t) => t.id === userTrack.id)) {
-    detectedTracks.push(userTrack);
+    // Set as current track (in-memory only)
+    if (!detectedTracks.some((t) => t.id === userTrack.id)) {
+      detectedTracks.push(userTrack);
+    }
+    currentTrack = userTrack;
+
+    // Mark user upload as active to suppress auto-detection
+    userUploadActive = true;
+    log(`User upload active: suppressing auto-detection until unload`);
+
+    // Persist cues and upload state to storage so they survive content script reinjection
+    storage.setCues(cues).catch((err) => warn("Failed to persist cues:", err));
+    storage.setUserUploadActive(true).catch((err) => warn("Failed to persist userUploadActive:", err));
+    storage.setUserUploadTrack(userTrack).catch((err) => warn("Failed to persist upload track:", err));
+
+    log(`Created track for uploaded file: ${userTrack.label}`);
+  } else {
+    // Auto-detected track: currentTrack was already set by selectTrack()
+    log(`Loaded auto-detected track content: ${filename || source}`);
   }
-  currentTrack = userTrack;
-
-  // Mark user upload as active to suppress auto-detection
-  userUploadActive = true;
-  log(`User upload active: suppressing auto-detection until unload`);
-
-  log(
-    `Created track for uploaded file: ${userTrack.label}`,
-  );
 }
 
 /**
@@ -2288,8 +2599,8 @@ function handleSubtitleUnload(): void {
     sendUnmuteNow();
   }
 
-  // Clear stored cues
-  storage.clearCues();
+  // Clear stored cues and upload state
+  storage.clearUserUploadState().catch((err) => warn("Failed to clear upload state:", err));
 
   // Show notification
   showNotification("info", "Subtitle file unloaded. Auto-detection re-enabled.");
@@ -2301,6 +2612,73 @@ function handleSubtitleUnload(): void {
 }
 
 /**
+ * Restore user-uploaded subtitles from storage on content script re-injection.
+ * This handles the case where the content script is re-loaded (e.g., SPA navigation,
+ * extension update) and the user's previously uploaded file would otherwise be lost.
+ */
+async function restoreUserUpload(): Promise<void> {
+  try {
+    const [isUploadActive, savedCues, savedTrack] = await Promise.all([
+      storage.getUserUploadActive(),
+      storage.getCues(),
+      storage.getUserUploadTrack(),
+    ]);
+
+    if (!isUploadActive || savedCues.length === 0) {
+      // No active upload to restore — clear stale data if any
+      if (isUploadActive) {
+        // Flag set but no cues — stale state, clean up
+        await storage.clearUserUploadState();
+      }
+      return;
+    }
+
+    log(`Restoring user upload: ${savedCues.length} cues, track="${savedTrack?.label || 'unknown'}"`);
+
+    // Re-run profanity detection on restored cues (detector settings may have changed)
+    const restoredCues = savedCues.map((cue) => {
+      const detection = detector.detect(cue.text);
+      return {
+        ...cue,
+        censoredText: detection.censoredText,
+        hasProfanity: detection.hasProfanity,
+        profanityScore: detection.score,
+        profanityMatches: detection.matches,
+        ...(detection.hasProfanity && settings.sensitivity !== 'high'
+          ? {
+              profanityWindows: computeProfanityWindows(
+                cue.id,
+                cue.startMs,
+                cue.endMs,
+                cue.text,
+                detection.matches,
+                settings.sensitivity,
+              ),
+            }
+          : {}),
+      };
+    });
+
+    cues = restoredCues;
+    cueIndex.build(cues);
+
+    // Restore track metadata
+    if (savedTrack) {
+      if (!detectedTracks.some((t) => t.id === savedTrack.id)) {
+        detectedTracks.push(savedTrack);
+      }
+      currentTrack = savedTrack;
+    }
+
+    // Re-enable user upload suppression
+    userUploadActive = true;
+    log(`User upload restored: suppressing auto-detection`);
+  } catch (err) {
+    warn("Failed to restore user upload state:", err);
+  }
+}
+
+/**
  * Process cues with profanity detection
  * For HLS streams, accumulate cues from multiple segments instead of replacing
  */
@@ -2308,6 +2686,17 @@ function processCues(newCues: Cue[]): void {
   log(
     `Processing ${newCues.length} new cues, existing: ${cues.length}`,
   );
+
+  // When a user upload is active, reject all auto-detected cues
+  // to prevent detected content from accumulating alongside user-provided subtitles
+  const firstCueSource = newCues[0]?.source || '';
+  const isUserSource = firstCueSource === 'user-upload' ||
+                       firstCueSource === 'user-selection' ||
+                       firstCueSource.includes('user-subtitle');
+  if (userUploadActive && !isUserSource) {
+    log(`Rejecting ${newCues.length} auto-detected cues (source="${firstCueSource}") because user upload is active`);
+    return;
+  }
 
   // Process new cues for profanity
   const processedNewCues = newCues.map((cue) => {
@@ -2347,8 +2736,6 @@ function processCues(newCues: Cue[]): void {
 
   // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
   // If new cues have similar timing range to existing, replace instead of accumulate
-  const firstCueSource = newCues[0]?.source || '';
-  log(`processCues: firstCueSource="${firstCueSource}", existing cues=${cues.length}`);
   const isSyncedSource = firstCueSource === 'fmovies' ||
                          firstCueSource === 'wyzie';
   const isYouTubeSource = firstCueSource === 'youtube-intercepted' ||

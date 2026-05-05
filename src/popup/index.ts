@@ -50,14 +50,14 @@ function setupEventHandlers(): void {
   const optionsBtn = document.getElementById("options") as HTMLButtonElement;
   const changeTrackBtn = document.getElementById("changeTrackBtn") as HTMLButtonElement;
   const unloadBtn = document.getElementById("unloadBtn") as HTMLButtonElement;
-  const subtitleFileInput = document.getElementById("subtitleFile") as HTMLInputElement;
+  const uploadBtn = document.getElementById("uploadBtn") as HTMLButtonElement;
   const openFullOptions = document.getElementById("openFullOptions") as HTMLAnchorElement;
 
   toggleBtn.addEventListener("click", handleToggle);
   optionsBtn.addEventListener("click", showSettingsView);
   changeTrackBtn.addEventListener("click", toggleTrackList);
   unloadBtn.addEventListener("click", handleUnload);
-  subtitleFileInput.addEventListener("change", handleFileUpload);
+  uploadBtn.addEventListener("click", handleUploadClick);
   
   // Full options link opens in new tab
   openFullOptions.addEventListener("click", (e) => {
@@ -488,32 +488,23 @@ async function handleToggle(): Promise<void> {
   await loadStatus();
 }
 
-async function handleFileUpload(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-
+async function handleUploadClick(): Promise<void> {
+  // Send a message to the content script to show an upload overlay
+  // directly on the video page. This avoids the Firefox bug where
+  // popup panels close when the native file picker opens.
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab.id;
-  if (!tabId) return;
+  if (!tab.id) return;
 
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    const content = e.target?.result as string;
-    try {
-      await browser.tabs.sendMessage(tabId, {
-        type: "uploadCues",
-        content,
-        filename: file.name,
-      });
-      isUserUploadActive = true;
-      trackList.classList.add("hidden");
-      await loadStatus();
-    } catch (err) {
-      error("Failed to upload cues:", err);
-    }
-  };
-  reader.readAsText(file);
+  try {
+    await browser.runtime.sendMessage({
+      type: "showUploadOverlay",
+      tabId: tab.id,
+    });
+    // Close the popup since the overlay is now shown on the video page
+    window.close();
+  } catch (err) {
+    error("Failed to show upload overlay:", err);
+  }
 }
 
 async function handleUnload(): Promise<void> {
@@ -522,8 +513,9 @@ async function handleUnload(): Promise<void> {
   if (!tabId) return;
 
   try {
-    await browser.tabs.sendMessage(tabId, {
+    await browser.runtime.sendMessage({
       type: "unloadCues",
+      tabId,
     });
     isUserUploadActive = false;
     currentTrack = null;

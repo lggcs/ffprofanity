@@ -221,17 +221,18 @@ body {
   display: none;
 }
 
-.track-upload label {
+.track-upload button {
   display: block;
   text-align: center;
   padding: 8px;
   cursor: pointer;
   border-radius: 4px;
   background: #f5f5f5;
+  border: 1px solid var(--border-color);
   transition: background 0.2s;
 }
 
-.track-upload label:hover {
+.track-upload button:hover {
   background: #e8e8e8;
 }
 

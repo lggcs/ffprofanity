@@ -11,12 +11,10 @@ import type { Settings } from '../types';
 let offsetSlider: HTMLInputElement;
 let offsetValue: HTMLSpanElement;
 let sensitivitySelect: HTMLSelectElement;
-let fileInput: HTMLInputElement;
 let unloadCuesBtn: HTMLButtonElement;
 let wordlistTextarea: HTMLTextAreaElement;
 let saveWordlistBtn: HTMLButtonElement;
 let resetWordlistBtn: HTMLButtonElement;
-let fileInfo: HTMLDivElement;
 let statusEl: HTMLDivElement;
 // Substitution elements
 let useSubstitutionsCheckbox: HTMLInputElement;
@@ -52,12 +50,10 @@ async function init(): Promise<void> {
   offsetSlider = document.getElementById('offsetSlider') as HTMLInputElement;
   offsetValue = document.getElementById('offsetValue') as HTMLSpanElement;
   sensitivitySelect = document.getElementById('sensitivity') as HTMLSelectElement;
-  fileInput = document.getElementById('fileInput') as HTMLInputElement;
   unloadCuesBtn = document.getElementById('unloadCues') as HTMLButtonElement;
   wordlistTextarea = document.getElementById('wordlist') as HTMLTextAreaElement;
   saveWordlistBtn = document.getElementById('saveWordlist') as HTMLButtonElement;
   resetWordlistBtn = document.getElementById('resetWordlist') as HTMLButtonElement;
-  fileInfo = document.getElementById('fileInfo') as HTMLDivElement;
   statusEl = document.getElementById('status') as HTMLDivElement;
   // Substitution elements
   useSubstitutionsCheckbox = document.getElementById('useSubstitutions') as HTMLInputElement;
@@ -89,7 +85,6 @@ async function init(): Promise<void> {
 
   // Setup event handlers
   offsetSlider.addEventListener('input', handleOffsetChange);
-  fileInput.addEventListener('change', handleFileUpload);
   unloadCuesBtn.addEventListener('click', handleUnloadCues);
   saveWordlistBtn.addEventListener('click', handleSaveWordlist);
   resetWordlistBtn.addEventListener('click', handleResetWordlist);
@@ -176,9 +171,6 @@ async function loadSettings(): Promise<void> {
   // Get cue count
   const cues = await storage.getCues();
   cueCount = cues.length;
-
-  // Update file info
-  updateFileInfo();
 }
 
 function handleOffsetChange(): void {
@@ -409,69 +401,47 @@ function updatePreview(): void {
   });
 }
 
-async function handleFileUpload(): Promise<void> {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-
-  showStatus('Processing subtitle file...', 'info');
-
-  const reader = new FileReader();
-  reader.onload = async (e) => {
+/**
+ * Find the tab with a video element by asking the background script.
+ * The background uses getAggregatedStatus which properly queries all frames.
+ */
+async function findVideoTab(): Promise<number | null> {
+  const tabs = await browser.tabs.query({});
+  for (const t of tabs) {
+    if (!t.id || t.url?.startsWith('moz-extension://')) continue;
     try {
-      const content = e.target?.result as string;
-
-      // Send to content script
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab.id) {
-        await browser.tabs.sendMessage(tab.id, {
-          type: 'uploadCues',
-          content,
-        });
-
-        isUserUploadActive = true;
-        showStatus(`File "${file.name}" processed successfully!`, 'success');
-        const cues = await storage.getCues();
-        cueCount = cues.length;
-        updateFileInfo();
-      }
-    } catch (error) {
-      showStatus(`Error processing file: ${error}`, 'error');
+      const response = await browser.runtime.sendMessage({
+        type: 'getAggregatedStatus',
+        tabId: t.id,
+      }) as { hasVideo?: boolean };
+      if (response?.hasVideo) return t.id;
+    } catch {
+      // No content script in this tab, skip
     }
-  };
-
-  reader.readAsText(file);
+  }
+  return null;
 }
 
 async function handleUnloadCues(): Promise<void> {
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tab.id) {
-      await browser.tabs.sendMessage(tab.id, {
-        type: 'unloadCues',
-      });
+    const videoTabId = await findVideoTab();
+    if (!videoTabId) {
+      showStatus('No video tab found.', 'error');
+      return;
+    }
+    await browser.runtime.sendMessage({
+      type: 'unloadCues',
+      tabId: videoTabId,
+    });
 
-      isUserUploadActive = false;
-      cueCount = 0;
-      showStatus('Subtitle file unloaded. Auto-detection re-enabled.', 'info');
-      updateFileInfo();
+    isUserUploadActive = false;
+    cueCount = 0;
+    showStatus('Subtitle file unloaded. Auto-detection re-enabled.', 'info');
+    if (unloadCuesBtn) {
+      unloadCuesBtn.style.display = 'none';
     }
   } catch (error) {
     showStatus(`Error unloading: ${error}`, 'error');
-  }
-}
-
-function updateFileInfo(): void {
-  if (cueCount > 0) {
-    fileInfo.textContent = `${cueCount} cues loaded`;
-    fileInfo.style.color = '#4a3';
-  } else {
-    fileInfo.textContent = 'No cues loaded';
-    fileInfo.style.color = '#888';
-  }
-
-  // Show unload button only when a user upload is active
-  if (unloadCuesBtn) {
-    unloadCuesBtn.style.display = isUserUploadActive ? 'inline-block' : 'none';
   }
 }
 

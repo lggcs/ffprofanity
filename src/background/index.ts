@@ -256,7 +256,7 @@ async function getAggregatedStatus(tabId: number): Promise<{
 /**
  * Handle messages from content scripts
  */
-browser.runtime.onMessage.addListener((message: unknown, sender) => {
+browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
   if (!message || typeof message !== "object") return;
 
   const msg = message as Record<string, unknown>;
@@ -360,6 +360,51 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
       detectedSubtitles.delete(tabId);
       return Promise.resolve({ success: true });
     }
+
+    case "uploadCues": {
+      // Relay from popup/options to the video tab
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
+      try {
+        await browser.tabs.sendMessage(tabId, {
+          type: "uploadCues",
+          content: msg.content,
+          filename: msg.filename,
+        });
+        return Promise.resolve({ success: true });
+      } catch (err) {
+        error(`Failed to relay uploadCues to tab ${tabId}:`, err);
+        return Promise.resolve({ success: false, error: String(err) });
+      }
+    }
+
+    case "unloadCues": {
+      // Relay from popup/options to the video tab
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
+      try {
+        await browser.tabs.sendMessage(tabId, {
+          type: "unloadCues",
+        });
+        return Promise.resolve({ success: true });
+      } catch (err) {
+        error(`Failed to relay unloadCues to tab ${tabId}:`, err);
+        return Promise.resolve({ success: false, error: String(err) });
+      }
+    }
+
+    case "showUploadOverlay": {
+      // Relay from popup to the video tab — shows upload overlay on the page
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
+      try {
+        await browser.tabs.sendMessage(tabId, {
+          type: "showUploadOverlay",
+        });
+        return Promise.resolve({ success: true });
+      } catch (err) {
+        error(`Failed to relay showUploadOverlay to tab ${tabId}:`, err);
+        return Promise.resolve({ success: false, error: String(err) });
+      }
+    }
+
   }
 });
 
