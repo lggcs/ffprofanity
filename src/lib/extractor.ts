@@ -8,6 +8,8 @@ import { createTrackFromElement, createTrackFromNetwork } from "./tracks";
 
 const SUBTITLE_EXTENSIONS = [".vtt", ".srt", ".ass", ".ssa", ".sub"];
 const FONT_EXTENSIONS = [".otf", ".ttf", ".woff", ".woff2", ".eot"];
+// JavaScript module extensions that should never be treated as subtitle URLs
+const JS_MODULE_EXTENSIONS = [".mjs", ".cjs"];
 
 const SUBTITLE_MIME_TYPES = [
   "text/vtt",
@@ -37,6 +39,12 @@ export function isSubtitleUrl(url: string): boolean {
     const path = urlObj.pathname.toLowerCase();
 
     if (FONT_EXTENSIONS.some((ext) => path.endsWith(ext))) {
+      return false;
+    }
+
+    // Exclude JS module files even if path contains subtitle-like segments
+    // e.g., /ui/subtitles/SubtitlesManager.mjs must not be detected as a subtitle
+    if (JS_MODULE_EXTENSIONS.some((ext) => path.endsWith(ext))) {
       return false;
     }
 

@@ -405,6 +405,35 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
       }
     }
 
+    case "fetchUrl": {
+      // Proxy fetch through background service worker to bypass CORS restrictions
+      // Content scripts can be blocked by CORS; the background has no such restrictions
+      const fetchUrl = msg.url as string | undefined;
+      if (!fetchUrl || typeof fetchUrl !== "string") {
+        return Promise.resolve({ success: false, error: "No URL provided" });
+      }
+      try {
+        debug(`Background proxying fetch for: ${fetchUrl.substring(0, 100)}`);
+        const response = await fetch(fetchUrl);
+        if (!response.ok) {
+          return Promise.resolve({
+            success: false,
+            error: `HTTP ${response.status}: ${response.statusText}`,
+            status: response.status,
+          });
+        }
+        const content = await response.text();
+        debug(`Background fetch received ${content.length} bytes from ${fetchUrl.substring(0, 60)}`);
+        return Promise.resolve({ success: true, content });
+      } catch (err) {
+        error(`Background fetch failed for ${fetchUrl.substring(0, 60)}:`, err);
+        return Promise.resolve({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
   }
 });
 
@@ -506,56 +535,73 @@ browser.runtime.onInstalled.addListener((details) => {
 const injectedTabs = new Set<number>();
 
 // Add CORS headers for subtitle requests so content script can fetch them
+// Covers .vtt, .srt, .ass, .ssa, and .sub subtitle formats
+const subtitleCorsRules = [
+  // Format: [id, extension]
+  [3, ".vtt"],
+  [4, ".srt"],
+  [5, ".ass"],
+  [6, ".ssa"],
+  [7, ".sub"],
+] as const;
+
+const corsHeadersFull = [
+  {
+    header: "Access-Control-Allow-Origin",
+    operation: "set" as const,
+    value: "*",
+  },
+  {
+    header: "Access-Control-Allow-Methods",
+    operation: "set" as const,
+    value: "GET, HEAD, OPTIONS",
+  },
+  {
+    header: "Access-Control-Allow-Credentials",
+    operation: "set" as const,
+    value: "true",
+  },
+];
+
+const corsHeadersOriginOnly = [
+  {
+    header: "Access-Control-Allow-Origin",
+    operation: "set" as const,
+    value: "*",
+  },
+];
+
+const subtitleCorsAddRules = subtitleCorsRules.flatMap(([id, ext]) => [
+  {
+    id,
+    priority: 1,
+    action: {
+      type: "modifyHeaders" as const,
+      responseHeaders: corsHeadersFull,
+    },
+    condition: {
+      urlFilter: `*://*/*${ext}*`,
+      resourceTypes: ["xmlhttprequest", "other", "media"] as const,
+    },
+  },
+  {
+    id: id + 100,
+    priority: 1,
+    action: {
+      type: "modifyHeaders" as const,
+      responseHeaders: corsHeadersOriginOnly,
+    },
+    condition: {
+      urlFilter: `*://*/*${ext}*`,
+      resourceTypes: ["main_frame", "sub_frame"] as const,
+    },
+  },
+]);
+
 browser.declarativeNetRequest
   .updateDynamicRules({
-    addRules: [
-      {
-        id: 1,
-        priority: 1,
-        action: {
-          type: "modifyHeaders" as const,
-          responseHeaders: [
-            {
-              header: "Access-Control-Allow-Origin",
-              operation: "set" as const,
-              value: "*",
-            },
-            {
-              header: "Access-Control-Allow-Methods",
-              operation: "set" as const,
-              value: "GET, HEAD, OPTIONS",
-            },
-            {
-              header: "Access-Control-Allow-Credentials",
-              operation: "set" as const,
-              value: "true",
-            },
-          ],
-        },
-        condition: {
-          urlFilter: "*://*/*.vtt*",
-          resourceTypes: ["xmlhttprequest", "other", "media"],
-        },
-      },
-      {
-        id: 2,
-        priority: 1,
-        action: {
-          type: "modifyHeaders" as const,
-          responseHeaders: [
-            {
-              header: "Access-Control-Allow-Origin",
-              operation: "set" as const,
-              value: "*",
-            },
-          ],
-        },
-        condition: {
-          urlFilter: "*://*/*.vtt*",
-          resourceTypes: ["main_frame", "sub_frame"],
-        },
-      },
-    ],
+    removeRuleIds: [1, 2, 3, 4, 5, 6, 7, 103, 104, 105, 106, 107],
+    addRules: subtitleCorsAddRules,
   })
   .catch((err) => {
     // Rules may already exist, ignore error
@@ -662,6 +708,45 @@ async function injectPageScriptForUrl(
       return true;
     } catch (err) {
       error(`Failed to inject Jellyfin script:`, err);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
+  // Cinebto / 111movies injection - FastStreamClient/FluidPlayer subtitle detection
+  // Injects into ALL frames (not just main frame) because the video is inside a nested iframe
+  if (/cinebto\.[a-z]+|cineb\.[a-z]+|111movies\.[a-z]+|111movies|twasmerelyhers\.[a-z]+/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/cinebto-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      log(`Injected Cinebto script into tab ${tabId} (all frames)`);
+      return true;
+    } catch (err) {
+      error(`Failed to inject Cinebto script:`, err);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
+  // 2embed injection - Video.js player subtitle detection
+  // 2embed is a streaming server used by cinebto and other sites
+  // Injects into ALL frames because 2embed is loaded inside an iframe
+  if (/2embed\.(org|cc|dev|io|net|xyz)|2embed\.club|2embed\.link|2embeds?\.[a-z]+/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/2embed-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      log(`Injected 2embed script into tab ${tabId} (all frames)`);
+      return true;
+    } catch (err) {
+      error(`Failed to inject 2embed script:`, err);
       injectedTabs.delete(tabId);
       return false;
     }

@@ -713,6 +713,14 @@ function hideNativeSubtitlesForSite(source: string): void {
   ) {
     // VidFast, VidSrc, and similar iframe embed players use Video.js
     site = 'videojs-player';
+  } else if (
+    hostname.includes('cinebto') ||
+    hostname.includes('cineb') ||
+    hostname.includes('111movies') ||
+    hostname.includes('twasmerelyhers')
+  ) {
+    // Cinebto / 111movies use FastStreamClient/FluidPlayer
+    site = 'cinebto';
   } else if (source === 'user-upload' || source.startsWith('user-upload')) {
     // User-uploaded subtitles on embedded players - try to detect Video.js
     site = 'videojs-player';
@@ -845,6 +853,25 @@ function hideNativeSubtitlesForSite(source: string): void {
     'plutotv.xhr-intercepted': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
     'plutotv.fetch-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
     'plutotv.fetch-intercepted': ['.vjs-text-track-display', '.vjs-text-track-cue', 'video::cue'],
+    // Cinebto / 111movies use FastStreamClient/FluidPlayer player
+    'cinebto': [
+      '.fluid_subtitles_container',
+      '.fluid_player_layout_default .fluid_subtitles_container',
+      '.mainplayer .fluid_subtitles_container',
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
+      'video::cue',
+    ],
+    'cinebto.xhr-subtitle': [
+      '.fluid_subtitles_container',
+      '.vjs-text-track-display',
+      'video::cue',
+    ],
+    'cinebto.fetch-subtitle': [
+      '.fluid_subtitles_container',
+      '.vjs-text-track-display',
+      'video::cue',
+    ],
   };
 
   const selectors = hideSelectors[site] || hideSelectors[site.split('.')[0]];
@@ -1340,6 +1367,67 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
 }
 
 /**
+ * Fetch subtitle content with fallback to background proxy and retry on server errors.
+ * Strategy:
+ * 1. Direct fetch from content script
+ * 2. On CORS or network error → fallback to background proxy fetch
+ * 3. On HTTP 5xx server error → retry once after short delay, then fallback
+ */
+async function fetchSubtitleContent(url: string): Promise<string> {
+  log(`Fetching subtitle URL: ${url}`);
+
+  // 1. Try direct fetch first
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      return await response.text();
+    }
+    // Server error (5xx) — retry once after a short delay
+    if (response.status >= 500) {
+      log(`HTTP ${response.status} — retrying in 2s...`);
+      await new Promise((r) => setTimeout(r, 2000));
+      const retry = await fetch(url);
+      if (retry.ok) {
+        return await retry.text();
+      }
+      log(`Retry also failed: HTTP ${retry.status} — falling back to background proxy`);
+    }
+  } catch (directErr) {
+    // CORS or network error — fall through to background proxy
+    log(`Direct fetch failed (${directErr instanceof Error ? directErr.message : String(directErr)}) — falling back to background proxy`);
+  }
+
+  // 2. Fallback: proxy fetch through background service worker (bypasses CORS)
+  const result = await browser.runtime.sendMessage({
+    type: "fetchUrl",
+    url,
+  }) as { success: boolean; content?: string; error?: string; status?: number };
+
+  if (result.success && result.content) {
+    log(`Background proxy fetch succeeded (${result.content.length} bytes)`);
+    return result.content;
+  }
+
+  // 3. If background also got 5xx, retry once
+  if (result.status && result.status >= 500) {
+    log(`Background proxy got HTTP ${result.status} — retrying in 2s...`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const retryResult = await browser.runtime.sendMessage({
+      type: "fetchUrl",
+      url,
+    }) as { success: boolean; content?: string; error?: string; status?: number };
+
+    if (retryResult.success && retryResult.content) {
+      log(`Background retry succeeded (${retryResult.content.length} bytes)`);
+      return retryResult.content;
+    }
+    throw new Error(retryResult.error || `HTTP ${retryResult.status}: Server error after retry`);
+  }
+
+  throw new Error(result.error || "Failed to fetch subtitle content");
+}
+
+/**
  * Select and load a subtitle track
  */
 async function selectTrack(track: SubtitleTrack): Promise<void> {
@@ -1390,27 +1478,15 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
   // If track has URL, fetch it
   if (track.url) {
     try {
-      log(`Fetching subtitle URL: ${track.url}`);
-      const response = await fetch(track.url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const content = await response.text();
-      log(
-        `Received ${content.length} bytes from subtitle URL`,
-      );
-      log(
-        `Content preview: ${content.substring(0, 200)}...`,
-      );
-
+      const content = await fetchSubtitleContent(track.url);
+      log(`Received ${content.length} bytes from subtitle URL`);
+      log(`Content preview: ${content.substring(0, 200)}...`);
       await handleSubtitleUpload(content, track.label, track.source);
-    } catch (error) {
-      error("Failed to fetch subtitle track:", error);
+    } catch (err) {
+      error("Failed to fetch subtitle track:", err);
       showNotification(
         "error",
-        `Failed to load subtitles: ${error instanceof Error ? error.message : "Unknown error"}`,
+        `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
       );
     }
   } else if (track.embedded && videoElement) {
