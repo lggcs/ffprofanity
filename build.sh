@@ -48,6 +48,7 @@ npm exec -- esbuild src/page-scripts/lookmovie-injected.ts --bundle --outfile=di
 npm exec -- esbuild src/page-scripts/jellyfin-injected.ts --bundle --outfile=dist/page-scripts/jellyfin-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/cinebto-injected.ts --bundle --outfile=dist/page-scripts/cinebto-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/2embed-injected.ts --bundle --outfile=dist/page-scripts/2embed-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
+npm exec -- esbuild src/page-scripts/fandango-injected.ts --bundle --outfile=dist/page-scripts/fandango-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 # Copy HTML files
 echo "Copying HTML files..."

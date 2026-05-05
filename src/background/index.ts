@@ -752,6 +752,25 @@ async function injectPageScriptForUrl(
     }
   }
 
+  // Fandango At Home (Vudu) injection - Shaka Player subtitle detection
+  // Injects into ALL frames because the video player runs inside #contentPlayerFrame
+  if (/athome\.fandango\.com|fandangoathome\.[a-z]+|vudu\.com/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ["page-scripts/fandango-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      log(`Injected Fandango script into tab ${tabId} (all frames)`);
+      return true;
+    } catch (err) {
+      error(`Failed to inject Fandango script:`, err);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
   return false;
 }
 

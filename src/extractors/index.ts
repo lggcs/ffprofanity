@@ -12,6 +12,7 @@ import { FMoviesExtractor } from "./fmovies";
 import { JellyfinExtractor } from "./jellyfin";
 import { CinebtoExtractor } from "./cinebto";
 import { TwoEmbedExtractor } from "./2embed";
+import { FandangoExtractor } from "./fandango";
 import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
@@ -24,6 +25,7 @@ const extractors: SiteExtractor[] = [
   new JellyfinExtractor(),
   new CinebtoExtractor(),
   new TwoEmbedExtractor(),
+  new FandangoExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -109,3 +111,4 @@ export { fmoviesExtractor } from "./fmovies";
 export { jellyfinExtractor } from "./jellyfin";
 export { cinebtoExtractor } from "./cinebto";
 export { twoEmbedExtractor } from "./2embed";
+export { fandangoExtractor } from "./fandango";

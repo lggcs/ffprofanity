@@ -40,6 +40,10 @@ export default defineConfig({
           __dirname,
           "src/page-scripts/2embed-injected.ts",
         ),
+        "page-scripts/fandango": resolve(
+          __dirname,
+          "src/page-scripts/fandango-injected.ts",
+        ),
       },
       output: {
         entryFileNames: (chunkInfo) => {
