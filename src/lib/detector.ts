@@ -605,8 +605,8 @@ export class ProfanityDetector {
     const mapping = this.substitutionMap.get(normalized);
     if (!mapping) return null;
 
-    // Get substitutions for the selected category (only use valid categories)
-    const validCategories = ['silly', 'polite', 'random', 'monkeys'] as const;
+    // Get substitutions for the selected category (monkeys handled by fast-path above)
+    const validCategories = ['silly', 'polite', 'random'] as const;
     const category = validCategories.includes(this.substitutionCategory as typeof validCategories[number])
       ? this.substitutionCategory as typeof validCategories[number]
       : 'silly';

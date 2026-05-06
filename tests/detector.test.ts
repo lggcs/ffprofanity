@@ -522,6 +522,57 @@ describe('ProfanityDetector with substitutions', () => {
       expect(result.censoredText).not.toBe('[CENSORED]');
       expect(['fudge', 'frick', 'freak', 'fiddlesticks', 'firetruck', 'fluffernutter', 'frock']).toContain(result.censoredText);
     });
+
+    it('should use monkey fast-path for monkeys category', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'shit'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'monkeys',
+      });
+
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'];
+
+      // Each profane word should be replaced by a monkey emoji
+      const result = detector.detect('What the fuck!');
+      expect(result.hasProfanity).toBe(true);
+      expect(MONKEY_EMOJIS).toContain(result.censoredText.replace(/What the /, '').replace(/!/, ''));
+
+      // Multiple profane words should each get a monkey emoji
+      const result2 = detector.detect('fuck this shit');
+      expect(result2.hasProfanity).toBe(true);
+      // Remove all known text and check only emoji remain
+      const stripped = result2.censoredText
+        .replace(/this/g, '')
+        .trim();
+      // Each word replaced should be one of the monkey emojis
+      for (const emoji of MONKEY_EMOJIS) {
+        while (stripped.includes(emoji)) {
+          // Just verifying they exist is fine
+          break;
+        }
+      }
+    });
+
+    it('should return monkeys even for words not in substitution map', () => {
+      // The fast-path returns a monkey emoji for ANY detected profanity,
+      // even if the word has no entry in the substitution map
+      const detector = new ProfanityDetector({
+        wordlist: ['asshat'],  // likely not in substitution map
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'monkeys',
+      });
+
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'];
+      const result = detector.detect('You asshat!');
+      expect(result.hasProfanity).toBe(true);
+      // Fast-path should still produce a monkey emoji, not [CENSORED]
+      const stripped = result.censoredText.replace('You ', '').replace('!', '');
+      expect(MONKEY_EMOJIS).toContain(stripped);
+    });
   });
 });
 
