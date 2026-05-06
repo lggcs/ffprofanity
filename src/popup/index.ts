@@ -308,7 +308,7 @@ async function loadStatus(): Promise<void> {
       isActive = response.active;
       currentTrack = response.currentTrack || null;
       detectedTracks = response.detectedTracks || [];
-      isUserUploadActive = response.userUploadActive || (currentTrack?.source === 'user') || false;
+      isUserUploadActive = response.userUploadActive === true;
 
       updateStatus(response);
       updateTrackSection();
@@ -329,7 +329,7 @@ async function loadStatus(): Promise<void> {
         isActive = response.active;
         currentTrack = response.currentTrack || null;
         detectedTracks = response.detectedTracks || [];
-        isUserUploadActive = response.userUploadActive || (currentTrack?.source === 'user') || false;
+        isUserUploadActive = response.userUploadActive === true;
 
         updateStatus(response);
         updateTrackSection();

@@ -154,6 +154,33 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
  * Get aggregated status for a tab (from all frames)
  * Queries each frame individually to collect video/subtitle status
  */
+/**
+ * Send a message to ALL frames in a tab and wait for all responses.
+ * Unlike browser.tabs.sendMessage (which resolves with the first response),
+ * this ensures every frame receives and processes the message.
+ */
+async function sendToAllFrames(tabId: number, message: unknown): Promise<unknown[]> {
+  let frames: { frameId: number; url: string }[] = [];
+  try {
+    frames = await browser.webNavigation.getAllFrames({ tabId });
+  } catch {
+    // webNavigation permission may not be available
+  }
+  if (!frames || frames.length === 0) {
+    frames = [{ frameId: 0, url: "" }];
+  }
+
+  const results = await Promise.allSettled(
+    frames.map((frame) =>
+      browser.tabs.sendMessage(tabId, message, { frameId: frame.frameId })
+    )
+  );
+
+  return results
+    .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
+    .map((r) => r.value);
+}
+
 async function getAggregatedStatus(tabId: number): Promise<{
   active: boolean;
   cueCount: number;
@@ -399,12 +426,12 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
     }
 
     case "unloadCues": {
-      // Relay from popup/options to the video tab
+      // Send unload to ALL frames in the tab (not just the main frame)
+      // so that every frame clears its userUploadActive state
       if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
       try {
-        await browser.tabs.sendMessage(tabId, {
-          type: "unloadCues",
-        });
+        const results = await sendToAllFrames(tabId, { type: "unloadCues" });
+        debug(`unloadCues sent to ${results.length} frames`);
         return Promise.resolve({ success: true });
       } catch (err) {
         error(`Failed to relay unloadCues to tab ${tabId}:`, err);

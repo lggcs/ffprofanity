@@ -2478,12 +2478,20 @@ async function handleMessage(message: unknown): Promise<unknown> {
 
     case "unloadCues": {
       log(`Received unloadCues message, hasVideo=${!!videoElement}`);
-      if (!videoElement) {
-        // This frame doesn't have the video — skip (don't relay).
-        log(`unloadCues: no video in this frame, skipping`);
-        break;
+      // All frames must clear their upload state, not just the video frame.
+      // Non-video frames still have userUploadActive in memory and need to
+      // clear it so getAggregatedStatus doesn't report stale state.
+      if (videoElement) {
+        handleSubtitleUnload();
+      } else {
+        // Clear in-memory state in non-video frames so aggregated status
+        // doesn't falsely report userUploadActive from orphaned frames
+        userUploadActive = false;
+        currentTrack = null;
+        cues = [];
+        detectedTracks = detectedTracks.filter(t => t.source !== 'user' && !t.id.startsWith('user-upload-'));
+        log("unloadCues: cleared upload state in non-video frame");
       }
-      handleSubtitleUnload();
       break;
     }
 
@@ -2683,7 +2691,7 @@ async function handleSubtitleUpload(
  * Handle unloading a user-uploaded subtitle file
  * Clears cues, resets track state, and re-enables auto-detection
  */
-function handleSubtitleUnload(): void {
+async function handleSubtitleUnload(): Promise<void> {
   log("Unloading user subtitle file, re-enabling auto-detection");
 
   // Clear all cues
@@ -2706,8 +2714,13 @@ function handleSubtitleUnload(): void {
     sendUnmuteNow();
   }
 
-  // Clear stored cues and upload state
-  storage.clearUserUploadState().catch((err) => warn("Failed to clear upload state:", err));
+  // Clear stored cues and upload state — await to ensure storage is
+  // cleared before the popup queries status (prevents stale data)
+  try {
+    await storage.clearUserUploadState();
+  } catch (err) {
+    warn("Failed to clear upload state:", err);
+  }
 
   // Show notification
   showNotification("info", "Subtitle file unloaded. Auto-detection re-enabled.");
