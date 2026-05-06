@@ -14,14 +14,12 @@ import { isSubtitleUrl, detectSubtitleFormat } from "../lib/extractor";
 import { getLanguageName } from "../lib/language";
 import { log, debug, warn, error } from '../lib/logger';
 
-// Active mute states per tab
+// Active mute states per tab — reference-counted to handle overlapping profanity
 const muteStates = new Map<
   number,
   {
     muted: boolean;
-    reasonId: string | null;
-    expectedUnmuteAt: number | null;
-    safetyTimer: ReturnType<typeof setTimeout> | null;
+    activeReasons: Map<string, { expectedUnmuteAt: number; safetyTimer: ReturnType<typeof setTimeout> | null }>;
   }
 >();
 
@@ -53,80 +51,103 @@ const tabStatus = new Map<
 >();
 
 /**
- * Mute a tab
+ * Mute a tab — supports multiple concurrent mute reasons (reference-counted)
  */
 async function muteTab(
   tabId: number,
   reasonId: string,
   expectedUnmuteAt: number,
 ): Promise<void> {
-  // Clear any existing safety timer
-  const state = muteStates.get(tabId);
-  if (state?.safetyTimer) {
-    clearTimeout(state.safetyTimer);
+  // Validate expectedUnmuteAt is a finite number
+  if (typeof expectedUnmuteAt !== 'number' || !isFinite(expectedUnmuteAt) || expectedUnmuteAt < 0) {
+    warn(`muteTab: invalid expectedUnmuteAt=${expectedUnmuteAt}, using fallback`);
+    expectedUnmuteAt = Date.now() + 5000; // Fallback: unmute in 5 seconds
   }
 
-  // Set muted state
-  muteStates.set(tabId, {
-    muted: true,
-    reasonId,
-    expectedUnmuteAt,
-    safetyTimer: null,
-  });
+  let state = muteStates.get(tabId);
+  if (!state) {
+    state = { muted: false, activeReasons: new Map() };
+    muteStates.set(tabId, state);
+  }
 
-  try {
-    await browser.tabs.update(tabId, { muted: true });
-    log(`Tab ${tabId} muted for reason ${reasonId}`);
-  } catch (err) {
-    error(`Failed to mute tab ${tabId}:`, err);
+  // Clear any existing safety timer for this reason
+  const existing = state.activeReasons.get(reasonId);
+  if (existing?.safetyTimer) {
+    clearTimeout(existing.safetyTimer);
+  }
+
+  // Add/update this reason
+  state.activeReasons.set(reasonId, { expectedUnmuteAt, safetyTimer: null });
+
+  // Only call browser.tabs.update if not already muted
+  if (!state.muted) {
+    state.muted = true;
+    try {
+      await browser.tabs.update(tabId, { muted: true });
+      log(`Tab ${tabId} muted for reason ${reasonId} (${state.activeReasons.size} active reasons)`);
+    } catch (err) {
+      error(`Failed to mute tab ${tabId}:`, err);
+    }
+  } else {
+    log(`Tab ${tabId} already muted, added reason ${reasonId} (${state.activeReasons.size} active reasons)`);
   }
 
   // Set safety timer in case unmute message never arrives
   const safetyDelay = expectedUnmuteAt - Date.now() + 1000; // 1 second buffer
-  if (safetyDelay > 0 && safetyDelay < 60000) {
-    // Max 1 minute safety timer
+  // Use a reasonable maximum: 5 minutes for safety timers
+  const MAX_SAFETY_DELAY = 5 * 60 * 1000;
+  if (safetyDelay > 0) {
+    const actualDelay = Math.min(safetyDelay, MAX_SAFETY_DELAY);
     const timer = setTimeout(async () => {
       const currentState = muteStates.get(tabId);
-      if (currentState?.muted && currentState.reasonId === reasonId) {
-        debug(`Safety timer triggered, unmuting tab ${tabId}`);
-        await unmuteTab(tabId, "safety-timer");
+      if (currentState?.activeReasons.has(reasonId)) {
+        debug(`Safety timer triggered for reason ${reasonId}, unmuting tab ${tabId}`);
+        currentState.activeReasons.delete(reasonId);
+        // Only unmute if no more active reasons remain
+        if (currentState.activeReasons.size === 0) {
+          await unmuteTab(tabId, `safety-timer:${reasonId}`);
+        }
       }
-    }, safetyDelay);
+    }, actualDelay);
 
-    const currentState = muteStates.get(tabId);
-    if (currentState) {
-      currentState.safetyTimer = timer;
+    const reasonEntry = state.activeReasons.get(reasonId);
+    if (reasonEntry) {
+      reasonEntry.safetyTimer = timer;
     }
   }
 }
 
 /**
- * Unmute a tab
+ * Unmute a tab — only unmutes when all mute reasons have been cleared
  */
 async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
   const state = muteStates.get(tabId);
+  if (!state) return;
 
-  // Clear safety timer
-  if (state?.safetyTimer) {
-    clearTimeout(state.safetyTimer);
-  }
-
-  // Only unmute if the reason matches or is from safety timer
-  if (state?.muted) {
-    try {
-      await browser.tabs.update(tabId, { muted: false });
-      log(`Tab ${tabId} unmuted`);
-    } catch (err) {
-      error(`Failed to unmute tab ${tabId}:`, err);
+  // Remove the specific reason (could be an explicit unmute for a reason, or safety timer)
+  // For "unmuteNow" messages, reasonId comes from the content script's reason tracking
+  if (state.activeReasons.has(reasonId)) {
+    const entry = state.activeReasons.get(reasonId);
+    if (entry?.safetyTimer) {
+      clearTimeout(entry.safetyTimer);
     }
+    state.activeReasons.delete(reasonId);
+    log(`Tab ${tabId} reason ${reasonId} cleared (${state.activeReasons.size} reasons remaining)`);
   }
 
-  muteStates.set(tabId, {
-    muted: false,
-    reasonId: null,
-    expectedUnmuteAt: null,
-    safetyTimer: null,
-  });
+  // Only actually unmute if no active reasons remain
+  if (state.activeReasons.size === 0) {
+    if (state.muted) {
+      try {
+        await browser.tabs.update(tabId, { muted: false });
+        log(`Tab ${tabId} unmuted`);
+      } catch (err) {
+        error(`Failed to unmute tab ${tabId}:`, err);
+      }
+      state.muted = false;
+    }
+    muteStates.delete(tabId);
+  }
 }
 
 /**
@@ -412,6 +433,16 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
       if (!fetchUrl || typeof fetchUrl !== "string") {
         return Promise.resolve({ success: false, error: "No URL provided" });
       }
+      // SSRF prevention: only allow HTTP/HTTPS URLs
+      try {
+        const parsed = new URL(fetchUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          error(` fetchUrl rejected: non-HTTP protocol "${parsed.protocol}"`);
+          return Promise.resolve({ success: false, error: "Only HTTP/HTTPS URLs are allowed" });
+        }
+      } catch {
+        return Promise.resolve({ success: false, error: "Invalid URL" });
+      }
       try {
         debug(`Background proxying fetch for: ${fetchUrl.substring(0, 100)}`);
         const response = await fetch(fetchUrl);
@@ -424,6 +455,12 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
         }
         const content = await response.text();
         debug(`Background fetch received ${content.length} bytes from ${fetchUrl.substring(0, 60)}`);
+        // Prevent excessively large responses from consuming memory
+        const MAX_FETCH_SIZE = 10 * 1024 * 1024; // 10 MB
+        if (content.length > MAX_FETCH_SIZE) {
+          error(`fetchUrl response too large: ${content.length} bytes (max ${MAX_FETCH_SIZE})`);
+          return Promise.resolve({ success: false, error: `Response too large (${content.length} bytes)` });
+        }
         return Promise.resolve({ success: true, content });
       } catch (err) {
         error(`Background fetch failed for ${fetchUrl.substring(0, 60)}:`, err);

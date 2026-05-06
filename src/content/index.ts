@@ -468,15 +468,34 @@ function injectApiInterceptor(): void {
 function handleInterceptedMessage(event: MessageEvent): void {
   if (event.source !== window) return;
 
+  // Validate message structure before processing
+  const data = event.data;
+  if (!data || typeof data !== "object" || typeof data.type !== "string") return;
+
+  // Validate known message types — reject anything unexpected
+  const VALID_TYPES = [
+    "FFPROFANITY_SUBTITLES_DETECTED",
+    "FFPROFANITY_SUBTITLE_CONTENT",
+    "FFPROFANITY_SUBTITLE_CAPTURED",
+    "FFPROFANITY_SUBTITLE_CUE",
+  ];
+  if (!VALID_TYPES.includes(data.type)) return;
+
+  // Enforce maximum content size for subtitle payloads (5 MB)
+  const MAX_CONTENT_SIZE = 5 * 1024 * 1024;
+  if (typeof data.content === "string" && data.content.length > MAX_CONTENT_SIZE) {
+    warn(`Rejected intercepted message: content exceeds ${MAX_CONTENT_SIZE} bytes`);
+    return;
+  }
+
   // When a user-uploaded subtitle file is active, suppress auto-detected content
   // to prevent accumulation of detected cues alongside user-provided ones
   if (userUploadActive) {
     // Still log for debugging but skip processing
-    const msgType = event.data?.type;
-    if (msgType === "FFPROFANITY_SUBTITLES_DETECTED" ||
-        msgType === "FFPROFANITY_SUBTITLE_CONTENT" ||
-        msgType === "FFPROFANITY_SUBTITLE_CAPTURED") {
-      debug(`Suppressing auto-detected subtitle (${msgType}) because user upload is active`);
+    if (data.type === "FFPROFANITY_SUBTITLES_DETECTED" ||
+        data.type === "FFPROFANITY_SUBTITLE_CONTENT" ||
+        data.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
+      debug(`Suppressing auto-detected subtitle (${data.type}) because user upload is active`);
     }
     // Allow FFPROFANITY_SUBTITLE_CUE through only if not from user upload context
     // TextTrack cues from HLS.js (PlutoTV) should also be suppressed
@@ -484,34 +503,34 @@ function handleInterceptedMessage(event: MessageEvent): void {
   }
 
   // Handle individual cues from textTracks (HLS.js timed cues)
-  if (event.data?.type === "FFPROFANITY_SUBTITLE_CUE") {
+  if (data.type === "FFPROFANITY_SUBTITLE_CUE") {
     if (!videoElement) {
       // Forward to top frame if in iframe
       if (window.self !== window.top) {
         try {
-          window.top?.postMessage(event.data, '*');
+          window.top?.postMessage(data, '*');
         } catch (e) { /* Cross-origin blocked */ }
       }
       return;
     }
-    textTracksCues.push(event.data);
+    textTracksCues.push(data);
     return;
   }
 
   // Handle subtitle content captured from network interception (YouTube timedtext)
-  if (event.data?.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
+  if (data.type === "FFPROFANITY_SUBTITLE_CAPTURED") {
     if (!videoElement) {
       // Forward to top frame if in iframe
-      if (window.self !== window.top && event.data?.content) {
+      if (window.self !== window.top && data.content) {
         log("Forwarding captured subtitle from iframe to top frame");
         try {
           window.top?.postMessage({
             type: "FFPROFANITY_SUBTITLE_CAPTURED",
-            content: event.data.content,
-            language: event.data.language,
-            isAsr: event.data.isAsr,
-            videoId: event.data.videoId,
-            url: event.data.url
+            content: data.content,
+            language: data.language,
+            isAsr: data.isAsr,
+            videoId: data.videoId,
+            url: data.url
           }, '*');
         } catch (e) {
           log("Could not forward captured subtitle (cross-origin blocked)");
@@ -520,7 +539,9 @@ function handleInterceptedMessage(event: MessageEvent): void {
       log("Skipping captured subtitle - no video element in this frame");
       return;
     }
-    const { content, language, isAsr, videoId, url } = event.data;
+    const { content, language, isAsr, videoId, url } = data as {
+      content: string; language: string; isAsr?: boolean; videoId?: string; url?: string;
+    };
     log(
       `Captured timedtext content: ${content?.length || 0} bytes for ${language} (video: ${videoId})`,
     );
@@ -539,23 +560,23 @@ function handleInterceptedMessage(event: MessageEvent): void {
   }
 
   // Handle subtitle content (fetched in page context with cookies)
-  if (event.data?.type === "FFPROFANITY_SUBTITLE_CONTENT") {
+  if (data.type === "FFPROFANITY_SUBTITLE_CONTENT") {
     // Skip if no video element - only process subtitles in frame with video
     if (!videoElement) {
       // If we're in an iframe and have content, forward to top frame
       // This handles cases where subtitle fetch happens in iframe contexts
-      if (window.self !== window.top && event.data?.content) {
+      if (window.self !== window.top && data.content) {
         log("Forwarding subtitle content from iframe to top frame");
         try {
           window.top?.postMessage({
             type: "FFPROFANITY_SUBTITLE_CONTENT",
-            content: event.data.content,
-            language: event.data.language,
-            label: event.data.label,
-            source: event.data.source,
-            segmentLoadTime: event.data.segmentLoadTime,
-            streamType: event.data.streamType,
-            url: event.data.url
+            content: data.content,
+            language: data.language,
+            label: data.label,
+            source: data.source,
+            segmentLoadTime: data.segmentLoadTime,
+            streamType: data.streamType,
+            url: data.url
           }, '*');
         } catch (e) {
           // Cross-origin restrictions may block this
@@ -565,8 +586,10 @@ function handleInterceptedMessage(event: MessageEvent): void {
       log("Skipping subtitle content - no video element in this frame");
       return;
     }
-    const { content, language, label, source, segmentLoadTime, streamType, url } =
-      event.data;
+    const { content, language, label, source, segmentLoadTime, streamType, url } = data as {
+      content: string; language: string; label: string; source: string;
+      segmentLoadTime?: number; streamType?: string; url?: string;
+    };
 
     // PlutoTV: Skip network-intercepted VTT content (wrong timing)
     // We use textTracks cues instead (correct timing from HLS.js)
@@ -605,20 +628,20 @@ function handleInterceptedMessage(event: MessageEvent): void {
   }
 
   // Handle track metadata
-  if (event.data?.type !== "FFPROFANITY_SUBTITLES_DETECTED") return;
+  if (data.type !== "FFPROFANITY_SUBTITLES_DETECTED") return;
 
   // Skip if no video element - only process subtitles in frame with video
   // This prevents iframes from processing subtitles
   if (!videoElement) {
     // If we're in an iframe and have subtitles, forward to top frame
     // This handles cases where XHR interception happens in iframe contexts
-    if (window.self !== window.top && event.data?.subtitles) {
+    if (window.self !== window.top && data.subtitles) {
       log("Forwarding subtitle detection from iframe to top frame");
       try {
         window.top?.postMessage({
           type: "FFPROFANITY_SUBTITLES_DETECTED",
-          source: event.data.source,
-          subtitles: event.data.subtitles
+          source: data.source,
+          subtitles: data.subtitles
         }, '*');
       } catch (e) {
         // Cross-origin restrictions may block this
@@ -629,7 +652,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
     return;
   }
 
-  const { subtitles, source } = event.data;
+  const { subtitles, source } = data as { subtitles: Array<{url?: string; label?: string; language?: string}>; source: string };
   log(
     `Received ${subtitles.length} subtitles from ${source}`,
   );
@@ -2039,6 +2062,8 @@ function createUploadOverlay(): void {
   const backdrop = document.createElement("div");
   backdrop.id = "ffprofanity-upload-overlay";
   backdrop.className = "ffprofanity-upload-backdrop";
+  // NOTE: This innerHTML is safe — it contains only static HTML with no user data.
+  // All dynamic text is set via textContent below.
   backdrop.innerHTML = `
     <div class="ffprofanity-upload-dialog">
       <div class="ffprofanity-upload-title">Upload Subtitles</div>
@@ -2425,6 +2450,12 @@ async function handleMessage(message: unknown): Promise<unknown> {
       const uploadContent = msg.content as string;
       const uploadFilename = msg.filename as string | undefined;
       log(`Received uploadCues message: ${uploadContent?.length || 0} bytes, filename="${uploadFilename}", hasVideo=${!!videoElement}`);
+      // Enforce maximum upload size (10 MB)
+      const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
+      if (typeof uploadContent !== "string" || uploadContent.length === 0 || uploadContent.length > MAX_UPLOAD_SIZE) {
+        warn(`uploadCues rejected: invalid or oversized content (${uploadContent?.length || 0} bytes, max ${MAX_UPLOAD_SIZE})`);
+        break;
+      }
       if (!videoElement) {
         // This frame doesn't have the video — skip (don't relay).
         // The popup sends to all frames and the frame with the video will handle it.

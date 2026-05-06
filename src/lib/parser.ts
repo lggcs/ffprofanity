@@ -644,12 +644,31 @@ export function cleanSubtitleText(text: string): string {
 
 /**
  * Sanitize text for safe DOM insertion.
- * Since all DOM assignments now use textContent/replaceChildren (which are
- * inherently safe), this is a pass-through. Kept as a named function so
- * call sites remain explicit about sanitization intent.
+ * Strips HTML tags (including script, img onerror, svg onload, etc.),
+ * VTT/ASS formatting tags, and control characters that could be exploited.
+ * Although DOM assignments use textContent (inherently safe), this provides
+ * defense-in-depth in case any code path switches to innerHTML.
  */
 export function sanitizeText(text: string): string {
-  return text;
+  if (!text) return text;
+
+  let sanitized = text;
+
+  // Strip HTML/VTT/ASS formatting tags: <i>, </i>, <b>, </b>, <u>, </u>,
+  // <font ...>, </font>, {\...}, <c.class>, </c>, <v name>, <lang>,
+  // and any other angle-bracket tags (including incomplete/unclosed)
+  sanitized = sanitized.replace(/<[^>]*>?/g, '');
+
+  // Strip ASS/SSA override tags: {\...}
+  sanitized = sanitized.replace(/\{\\[^}]*\}/g, '');
+
+  // Strip NULL bytes and other control characters (except newline/tab)
+  sanitized = sanitized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+  // Strip null unicode characters
+  sanitized = sanitized.replace(/\uFFFD/g, '');
+
+  return sanitized;
 }
 
 /**
