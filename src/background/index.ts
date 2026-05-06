@@ -151,6 +151,34 @@ async function unmuteTab(tabId: number, reasonId: string): Promise<void> {
 }
 
 /**
+ * Force unmute a tab — clears ALL active reasons and unmutes immediately.
+ * Used for emergency unmute (e.g., subtitle unload) when all reasons should be dropped.
+ */
+async function forceUnmuteTab(tabId: number): Promise<void> {
+  const state = muteStates.get(tabId);
+  if (!state) return;
+
+  // Clear all safety timers
+  for (const [, entry] of state.activeReasons) {
+    if (entry.safetyTimer) {
+      clearTimeout(entry.safetyTimer);
+    }
+  }
+  state.activeReasons.clear();
+
+  if (state.muted) {
+    try {
+      await browser.tabs.update(tabId, { muted: false });
+      log(`Tab ${tabId} force-unmuted (all reasons cleared)`);
+    } catch (err) {
+      error(`Failed to force-unmute tab ${tabId}:`, err);
+    }
+    state.muted = false;
+  }
+  muteStates.delete(tabId);
+}
+
+/**
  * Get aggregated status for a tab (from all frames)
  * Queries each frame individually to collect video/subtitle status
  */
@@ -324,7 +352,14 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
 
     case "unmuteNow": {
       if (!tabId) return;
-      unmuteTab(tabId, "unmute-request");
+      const unmuteMsg = message as UnmuteNowMessage;
+      if (unmuteMsg.reasonId) {
+        // Clear the specific reason that matches the mute
+        unmuteTab(tabId, unmuteMsg.reasonId);
+      } else {
+        // Legacy: clear all reasons (e.g., from unload or emergency unmute)
+        forceUnmuteTab(tabId);
+      }
       break;
     }
 

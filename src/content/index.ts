@@ -2707,11 +2707,33 @@ async function handleSubtitleUnload(): Promise<void> {
   // Clear the user upload active flag to re-enable auto-detection
   userUploadActive = false;
 
-  // Reset profanity state
-  currentProfanityCue = null;
-  currentProfanityWindow = null;
+  // Reset profanity state and force unmute (clears ALL active mute reasons)
   if (isMuted) {
-    sendUnmuteNow();
+    // Capture reasonId before clearing currentProfanityCue
+    const reasonId = currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown";
+    currentProfanityCue = null;
+    currentProfanityWindow = null;
+    // Unmute video element directly
+    if (videoElement && originalVolume !== null) {
+      videoElement.muted = false;
+      videoElement.volume = originalVolume;
+      originalVolume = null;
+    } else if (videoElement) {
+      videoElement.muted = false;
+    }
+    isMuted = false;
+    // Tell background to force-unmute (clear all reasons, not just one)
+    try {
+      browser.runtime.sendMessage({
+        type: "unmuteNow",
+        // No reasonId — signals background to use forceUnmuteTab
+      });
+    } catch {
+      warn("Failed to send unmute message - background not ready");
+    }
+  } else {
+    currentProfanityCue = null;
+    currentProfanityWindow = null;
   }
 
   // Clear stored cues and upload state — await to ensure storage is
@@ -3262,15 +3284,20 @@ function sendUnmuteNow(): void {
   }
 
   // Secondary method: ask background to unmute tab (works on desktop only)
+  // Include reasonId matching the mute so background can clear the correct entry
+  const reasonId = currentProfanityCue ? `cue-${currentProfanityCue.id}` : "unknown";
   try {
     browser.runtime.sendMessage({
       type: "unmuteNow",
+      reasonId,
     });
   } catch {
     warn("Failed to send unmute message - background not ready");
   }
 
   isMuted = false;
+  currentProfanityCue = null;
+  currentProfanityWindow = null;
 }
 
 /**

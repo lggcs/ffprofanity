@@ -141,7 +141,7 @@ export interface MuteNowMessage {
 
 export interface UnmuteNowMessage {
   type: 'unmuteNow';
-  reasonId: string;
+  reasonId?: string;
 }
 
 export interface CuesMessage {
