@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Profanity Filter (Dev)",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Mute profanity and display censored subtitles while watching videos. All processing is done locally to protect your privacy.",
   "author": "ffprofanity",
   "homepage_url": "https://github.com/lggcs/ffprofanity",
