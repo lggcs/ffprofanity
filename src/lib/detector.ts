@@ -603,9 +603,20 @@ export class ProfanityDetector {
 
     // Check default substitution map
     const mapping = this.substitutionMap.get(normalized);
-    if (!mapping) return null;
+    if (mapping) {
+      const sub = this.pickSubstitutionFromMapping(mapping);
+      if (sub) return sub;
+    }
 
-    // Get substitutions for the selected category (monkeys handled by fast-path above)
+    // Root-word fallback: for compounds without an explicit entry,
+    // try decomposing by known profanity roots and combine substitutions
+    return this.getRootFallbackSubstitution(normalized);
+  }
+
+  /**
+   * Pick a substitution from a mapping entry for the current category
+   */
+  private pickSubstitutionFromMapping(mapping: SubstitutionMapping): string | null {
     const validCategories = ['silly', 'polite', 'random'] as const;
     const category = validCategories.includes(this.substitutionCategory as typeof validCategories[number])
       ? this.substitutionCategory as typeof validCategories[number]
@@ -622,6 +633,35 @@ export class ProfanityDetector {
     }
 
     return randomChoice(categoryOptions) || null;
+  }
+
+  /**
+   * Root-word fallback: decompose compound profanity and combine substitutions
+   * e.g. "fuckface" → root "fuck" (→ "fudge") + suffix "face" → "fudge-face"
+   * e.g. "shithead" → root "shit" (→ "shoot") + suffix "head" → "shoot-head"
+   */
+  private getRootFallbackSubstitution(normalized: string): string | null {
+    // Profanity roots ordered by length (longest first to match "bullshit" before "shit")
+    const roots = ['bullshit', 'horseshit', 'clusterfuck', 'motherfuck', 'mothafuck', 'muthafuck', 'mutherfuck', 'goddamn', 'godamn', 'goddam', 'godam', 'fucking', 'fucker', 'fuck', 'shithead', 'shit', 'asshole', 'asshat', 'ass', 'arse', 'bitch', 'cunt', 'dick', 'cock', 'damn', 'hell', 'piss', 'whore', 'slut', 'bastard', 'crap', 'twat', 'wank', 'bollock', 'bollok', 'pussy', 'nigg'];
+
+    for (const root of roots) {
+      if (normalized === root) continue; // Already checked via direct lookup
+      if (normalized.startsWith(root)) {
+        const suffix = normalized.slice(root.length);
+        const rootMapping = this.substitutionMap.get(root);
+        if (rootMapping) {
+          const rootSub = this.pickSubstitutionFromMapping(rootMapping);
+          if (rootSub) {
+            // Combine root substitution with suffix (hyphenated if suffix is meaningful)
+            if (suffix.length > 0) {
+              return rootSub + '-' + suffix;
+            }
+            return rootSub;
+          }
+        }
+      }
+    }
+    return null;
   }
 
   /**

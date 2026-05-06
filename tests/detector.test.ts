@@ -573,6 +573,135 @@ describe('ProfanityDetector with substitutions', () => {
       const stripped = result.censoredText.replace('You ', '').replace('!', '');
       expect(MONKEY_EMOJIS).toContain(stripped);
     });
+
+    it('should use root-word fallback for compound profanity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'fuckface', 'fuckinghell'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      // 'fuck' has an explicit entry
+      const result1 = detector.getSubstitution('fuck');
+      expect(result1).not.toBeNull();
+      expect(result1).not.toBe('[CENSORED]');
+
+      // 'fuckface' should get root fallback: root sub + '-face'
+      const result2 = detector.getSubstitution('fuckface');
+      expect(result2).not.toBeNull();
+      expect(result2).toContain('-face');
+
+      // 'fucking' has an explicit entry, so no fallback needed
+      const result3 = detector.getSubstitution('fucking');
+      expect(result3).not.toBeNull();
+      expect(result3).not.toBe('[CENSORED]');
+
+      // Unknown compound should get root fallback
+      const result4 = detector.getSubstitution('fuckburger');
+      expect(result4).not.toBeNull();
+      expect(result4).toContain('-burger');
+    });
+
+    it('should fall back to [CENSORED] for words with no root match', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['someunknownword'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      const result = detector.getSubstitution('someunknownword');
+      expect(result).toBeNull();
+    });
+
+    it('should use explicit entry over root fallback for compounds with entries', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['bullshit'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      // 'bullshit' has its own explicit entry, should NOT be decomposed
+      const result = detector.getSubstitution('bullshit');
+      expect(result).not.toBeNull();
+      // Should not contain '-shit' suffix from fallback
+      expect(result).not.toContain('-shit');
+    });
+
+    it('should provide substitutions for new slur entries', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['beaner', 'chink', 'gook', 'nazi'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      for (const word of ['beaner', 'chink', 'gook', 'nazi']) {
+        const sub = detector.getSubstitution(word);
+        expect(sub).not.toBeNull();
+        expect(sub).not.toBe('[CENSORED]');
+      }
+    });
+
+    it('should provide substitutions for sexual/anatomical entries', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['anal', 'boner', 'dildo', 'porn', 'hentai'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      for (const word of ['anal', 'boner', 'dildo', 'porn', 'hentai']) {
+        const sub = detector.getSubstitution(word);
+        expect(sub).not.toBeNull();
+        expect(sub).not.toBe('[CENSORED]');
+      }
+    });
+
+    it('should provide substitutions for violence/crime entries', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['rape', 'pedophile', 'incest', 'molest'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'polite',
+      });
+
+      for (const word of ['rape', 'pedophile', 'incest', 'molest']) {
+        const sub = detector.getSubstitution(word);
+        expect(sub).not.toBeNull();
+        expect(sub).not.toBe('[CENSORED]');
+      }
+    });
+
+    it('should use root-word fallback in censorText for compounds', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck', 'shit', 'damn', 'fucknugget', 'shitstain', 'damnfool'],
+        sensitivity: 'low',
+        useContextFiltering: false,
+        useSubstitutions: true,
+        substitutionCategory: 'silly',
+      });
+
+      // 'fucknugget' should get root fallback: fuck-sub + '-nugget'
+      const result = detector.detect('You fucknugget!');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).toContain('-nugget');
+      expect(result.censoredText).not.toContain('fuck');
+
+      // 'shitstain' should get root fallback: shit-sub + '-stain'
+      const result2 = detector.detect('What a shitstain');
+      expect(result2.hasProfanity).toBe(true);
+      expect(result2.censoredText).toContain('-stain');
+      expect(result2.censoredText).not.toContain('shit');
+    });
   });
 });
 
