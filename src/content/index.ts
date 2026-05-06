@@ -163,18 +163,19 @@ async function init(): Promise<void> {
   });
 
   // Create detector
-  // Only pass wordlist if user has custom words; otherwise use defaults
+  // Always use default wordlist as base; add custom words on top
+  // Passing settings.wordlist to createDetector would REPLACE the defaults
   const detectorConfig: Partial<import("../lib/detector").ProfanityConfig> = {
     ...settings,
-    wordlist: settings.wordlist.length > 0 ? settings.wordlist : undefined,
+    wordlist: undefined, // Use DEFAULT_WORDLIST as base
     customSubstitutions: settings.customSubstitutions
       ? new Map(Object.entries(settings.customSubstitutions))
       : undefined,
   };
   detector = createDetector(detectorConfig);
-  if (settings.wordlist.length > 0) {
-    detector.addWords(settings.wordlist);
-  }
+  // Add custom words on top of the default wordlist
+  // Lines starting with - are removal directives
+  applyCustomWordlist(settings.wordlist);
   // Apply substitution settings
   if (settings.useSubstitutions) {
     detector.setSubstitutions(true, settings.substitutionCategory);
@@ -2343,15 +2344,21 @@ function handleStorageChange(
     settings = { ...settings, ...newSettings };
 
     // Recreate detector with new settings
+    // Always use default wordlist as base; add custom words on top
     const newDetectorConfig: Partial<
       import("../lib/detector").ProfanityConfig
     > = {
       ...settings,
+      wordlist: undefined, // Use DEFAULT_WORDLIST as base
       customSubstitutions: settings.customSubstitutions
         ? new Map(Object.entries(settings.customSubstitutions))
         : undefined,
     };
     detector = createDetector(newDetectorConfig);
+    // Add custom words on top of the default wordlist
+    if (settings.wordlist.length > 0) {
+      applyCustomWordlist(settings.wordlist);
+    }
 
     // Apply substitution settings
     if (settings.useSubstitutions) {
@@ -2387,11 +2394,26 @@ function handleStorageChange(
       cueIndex.build(cues);
     }
 
-    // Re-process censored text if substitution settings changed
-    if (
+    // Re-detect profanity on ALL cues when the wordlist or custom substitutions change.
+    // This ensures newly added/removed words and changed substitutions take effect
+    // on already-loaded subtitles without requiring a page reload.
+    const oldWordlist = (oldSettings as Partial<Settings>).wordlist || [];
+    const newWordlist = (newSettings as Partial<Settings>).wordlist || [];
+    const oldCustomSubs = (oldSettings as Partial<Settings>).customSubstitutions || {};
+    const newCustomSubs = (newSettings as Partial<Settings>).customSubstitutions || {};
+    const wordlistChanged = Array.isArray(oldWordlist) && Array.isArray(newWordlist) &&
+        JSON.stringify([...oldWordlist].sort()) !== JSON.stringify([...newWordlist].sort());
+    const customSubsChanged = JSON.stringify(oldCustomSubs) !== JSON.stringify(newCustomSubs);
+    if (wordlistChanged || customSubsChanged) {
+      log(
+        `Wordlist or custom substitutions changed, re-detecting profanity on all cues`,
+      );
+      reprocessCuesWithNewDetector();
+    } else if (
       oldSettings.useSubstitutions !== settings.useSubstitutions ||
       oldSettings.substitutionCategory !== settings.substitutionCategory
     ) {
+      // Substitution category/toggle changed without wordlist changes — only re-censor text
       log(
         `Substitution settings changed from ${oldSettings.useSubstitutions}/${oldSettings.substitutionCategory} to ${settings.useSubstitutions}/${settings.substitutionCategory}, re-processing cue text`,
       );
@@ -2818,6 +2840,66 @@ async function restoreUserUpload(): Promise<void> {
   } catch (err) {
     warn("Failed to restore user upload state:", err);
   }
+}
+
+/**
+ * Apply custom wordlist entries to the detector.
+ * Entries starting with '-' are removal directives; all others are additions.
+ */
+function applyCustomWordlist(wordlist: string[]): void {
+  const toAdd: string[] = [];
+  const toRemove: string[] = [];
+  for (const entry of wordlist) {
+    if (entry.startsWith('-')) {
+      const word = entry.slice(1).trim();
+      if (word) toRemove.push(word);
+    } else {
+      toAdd.push(entry);
+    }
+  }
+  if (toAdd.length > 0) {
+    detector.addWords(toAdd);
+  }
+  if (toRemove.length > 0) {
+    detector.removeWords(toRemove);
+  }
+}
+
+/**
+ * Re-detect profanity on all existing cues using the current detector.
+ * Called when the wordlist changes so that newly added/removed words
+ * take effect on already-loaded subtitles without requiring a page reload.
+ */
+function reprocessCuesWithNewDetector(): void {
+  let profanityCount = 0;
+  for (const cue of cues) {
+    const detection = detector.detect(cue.text);
+    cue.censoredText = detection.censoredText;
+    cue.hasProfanity = detection.hasProfanity;
+    cue.profanityScore = detection.score;
+    cue.profanityMatches = detection.matches;
+
+    if (detection.hasProfanity && settings.sensitivity !== "high") {
+      cue.profanityWindows = computeProfanityWindows(
+        cue.id,
+        cue.startMs,
+        cue.endMs,
+        cue.text,
+        detection.matches,
+        settings.sensitivity,
+      );
+      profanityCount++;
+    } else {
+      cue.profanityWindows = undefined;
+    }
+  }
+
+  // Rebuild the cue index with updated profanity data
+  cueIndex.build(cues);
+
+  log(
+    `Reprocessed ${cues.length} cues with new detector: ${profanityCount} with profanity`,
+  );
 }
 
 /**

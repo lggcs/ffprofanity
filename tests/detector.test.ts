@@ -267,6 +267,36 @@ describe('ProfanityDetector', () => {
     });
   });
 
+  describe('addWords preserves default wordlist', () => {
+    it('should keep default words when addWords is used', () => {
+      // createDetector with no wordlist override uses DEFAULT_WORDLIST
+      const detector = createDetector({});
+      // "fuck" is in the default wordlist — should still be detected
+      expect(detector.detect('What the fuck').hasProfanity).toBe(true);
+
+      // Add a custom word on top of defaults
+      detector.addWords(['what']);
+      // Custom word should now be detected
+      expect(detector.detect('What is this').hasProfanity).toBe(true);
+      // Default words should STILL be detected (this was the previous bug:
+      // passing settings.wordlist to createDetector replaced DEFAULT_WORDLIST)
+      expect(detector.detect('What the fuck').hasProfanity).toBe(true);
+      expect(detector.detect('Oh shit').hasProfanity).toBe(true);
+    });
+
+    it('should handle removal of words from default wordlist', () => {
+      const detector = createDetector({});
+      // "crap" is in the default wordlist but has no obfuscation regex pattern
+      expect(detector.detect('This is crap').hasProfanity).toBe(true);
+      // Remove "crap" from the wordlist
+      detector.removeWords(['crap']);
+      // After removal, word match should not trigger on "crap"
+      expect(detector.detect('This is crap').hasProfanity).toBe(false);
+      // Other defaults should still work
+      expect(detector.detect('damn it').hasProfanity).toBe(true);
+    });
+  });
+
   describe('censorText', () => {
     const detector = new ProfanityDetector({
       wordlist: ['fuck', 'shit'],
