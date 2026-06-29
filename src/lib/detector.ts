@@ -701,7 +701,7 @@ export class ProfanityDetector {
     for (const phrase of this.phrases) {
       // Create regex that matches the phrase with flexible whitespace
       // Use word boundaries at start and end of the whole phrase
-      const phrasePattern = phrase.replace(/\s+/g, '\\s+');
+      const phrasePattern = phrase.replace(/\s+/g, '[\\s\\-]+');
       const phraseRegex = new RegExp(`(^|[^a-z'])(${phrasePattern})(?![a-z'])`, 'gi');
       let match;
       while ((match = phraseRegex.exec(text)) !== null) {

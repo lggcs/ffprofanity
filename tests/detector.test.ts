@@ -17,6 +17,7 @@ import {
   computeProfanityWindows,
   RELIGIOUS_WHITELIST,
 } from '../src/lib/detector';
+import { DEFAULT_WORDLIST } from '../src/lib/wordlist';
 import {
   DEFAULT_SUBSTITUTIONS,
   buildSubstitutionMap,
@@ -1132,6 +1133,85 @@ describe('Religious Whitelist', () => {
 
       // Allowed again
       expect(detector.detect('Damn it').hasProfanity).toBe(false);
+    });
+  });
+
+  describe('Religious compound profanity with production wordlist', () => {
+    // These tests use DEFAULT_WORDLIST to test real-world behavior
+    it('should allow "Jesus Christ came to saved damned souls from Hell" at Low', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('Jesus Christ came to saved damned souls from Hell');
+      expect(result.hasProfanity).toBe(false);
+    });
+
+    it('should block "god damn" at Low (compound profanity)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('god damn');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.some(m => m.word.toLowerCase().includes('god'))).toBe(true);
+    });
+
+    it('should block "god-damn" at Low (hyphenated compound)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('god-damn');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should block "goddamn" at Low (compound single word)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('goddamn');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should block "god dammit" at Low', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('god dammit');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should block "christ killer" at Low', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('christ killer');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.some(m => m.word.toLowerCase().includes('christ killer'))).toBe(true);
+    });
+
+    it('should allow individual religious words at Low but block actual profanity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      // Individual religious words are fine
+      expect(detector.detect('God is great').hasProfanity).toBe(false);
+      expect(detector.detect('Hell is real').hasProfanity).toBe(false);
+      expect(detector.detect('Jesus wept').hasProfanity).toBe(false);
+      // But compound profanity is still blocked
+      expect(detector.detect('God damn it').hasProfanity).toBe(true);
     });
   });
 });
