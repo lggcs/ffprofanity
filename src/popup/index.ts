@@ -24,6 +24,8 @@ let trackList: HTMLElement;
 let trackOptions: HTMLElement;
 let mainView: HTMLElement;
 let settingsView: HTMLElement;
+let showUpcomingCheckbox: HTMLInputElement;
+let showProfanityOnlyCheckbox: HTMLInputElement;
 
 async function init(): Promise<void> {
   // Get DOM elements
@@ -73,8 +75,8 @@ function setupEventHandlers(): void {
   const offsetForwardBtn = document.getElementById("offsetForward") as HTMLButtonElement;
   const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
   const sensitivitySelect = document.getElementById("sensitivity") as HTMLSelectElement;
-  const showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
-  const showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
+  showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
+  showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
   const useSubstitutionsCheckbox = document.getElementById("useSubstitutions") as HTMLInputElement;
   const substitutionCategorySelect = document.getElementById("substitutionCategory") as HTMLSelectElement;
   const fontSizeSelect = document.getElementById("fontSize") as HTMLSelectElement;
@@ -108,15 +110,13 @@ function updatePopupUpcomingCuesState(): void {
 
 async function loadSettings(): Promise<void> {
   try {
-    settings = await browser.storage.local.get("settings") as { settings?: Partial<Settings> };
-    settings = settings.settings || {};
+    const result = await browser.storage.local.get("settings") as { settings?: Partial<Settings> };
+    settings = result.settings || {};
 
     // Update settings view with loaded values
     const offsetSlider = document.getElementById("offsetSlider") as HTMLInputElement;
     const offsetValue = document.getElementById("offsetValue") as HTMLElement;
     const sensitivitySelect = document.getElementById("sensitivity") as HTMLSelectElement;
-    const showUpcomingCheckbox = document.getElementById("showUpcomingCues") as HTMLInputElement;
-    const showProfanityOnlyCheckbox = document.getElementById("showProfanityOnly") as HTMLInputElement;
     const useSubstitutionsCheckbox = document.getElementById("useSubstitutions") as HTMLInputElement;
     const substitutionCategorySelect = document.getElementById("substitutionCategory") as HTMLSelectElement;
     const fontSizeSelect = document.getElementById("fontSize") as HTMLSelectElement;

@@ -114,12 +114,15 @@ function processTextTracksCues(): void {
 
   // Convert to our Cue format
   const newCues: Cue[] = pendingCues.map((tc, idx) => {
-    const id = `texttrack-${Date.now()}-${idx}`;
     return {
-      id,
+      id: Date.now() + idx,
       startMs: Math.round(tc.startTime * 1000),
       endMs: Math.round(tc.endTime * 1000),
       text: tc.text,
+      censoredText: tc.text,
+      hasProfanity: false,
+      profanityScore: 0,
+      profanityMatches: [],
       source: 'plutotv-texttracks',
     };
   });
@@ -653,7 +656,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
     return;
   }
 
-  const { subtitles, source } = data as { subtitles: Array<{url?: string; label?: string; language?: string}>; source: string };
+  const { subtitles, source } = data as { subtitles: Array<{url?: string; label?: string; language?: string}>; source: "video" | "network" | "user" };
   log(
     `Received ${subtitles.length} subtitles from ${source}`,
   );
@@ -803,7 +806,7 @@ function hideNativeSubtitlesForSite(source: string): void {
 
   // Also try to disable native <track> elements on video elements
   try {
-    const videos = document.querySelectorAll('video');
+    const videos = Array.from(document.querySelectorAll('video'));
     for (const video of videos) {
       if (video.textTracks) {
         for (let i = 0; i < video.textTracks.length; i++) {
@@ -970,7 +973,7 @@ function hideNativeSubtitlesForSite(source: string): void {
     const observer = new MutationObserver(() => {
       // Re-disable any text tracks that might have been re-enabled
       try {
-        const videos = document.querySelectorAll('video');
+        const videos = Array.from(document.querySelectorAll('video'));
         for (const video of videos) {
           if (video.textTracks) {
             for (let i = 0; i < video.textTracks.length; i++) {
@@ -1476,7 +1479,7 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
 
   // When a user upload is active, don't auto-select detected tracks.
   // User must explicitly choose to switch tracks via popup.
-  if (userUploadActive && track.source !== 'user' && track.source !== 'user-upload' && track.source !== 'user-selection') {
+  if (userUploadActive && track.source !== 'user') {
     log(`User upload active - not auto-selecting detected track: ${track.label} (source: ${track.source})`);
     return;
   }
