@@ -506,10 +506,33 @@ async function handleToggle(): Promise<void> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab.id) return;
 
-  const message = isActive ? { type: "disable" } : { type: "enable" };
+  const newEnabled = !isActive;
+  const message = newEnabled
+    ? { type: "enable", tabId: tab.id }
+    : { type: "disable", tabId: tab.id };
 
-  await browser.tabs.sendMessage(tab.id, message);
-  isActive = !isActive;
+  // Persist the enabled state so it survives navigation and re-injection
+  try {
+    const result = (await browser.storage.local.get("settings")) as {
+      settings?: Partial<Settings>;
+    };
+    const existing = result.settings || {};
+    await browser.storage.local.set({
+      settings: { ...existing, enabled: newEnabled },
+    });
+  } catch {
+    error("Failed to persist enabled state to storage");
+  }
+
+  // Route through background so it can relay to ALL frames and
+  // release any active tab mute state
+  try {
+    await browser.runtime.sendMessage(message);
+  } catch {
+    error("Failed to send toggle message via background");
+  }
+
+  isActive = newEnabled;
 
   // Reload status
   await loadStatus();

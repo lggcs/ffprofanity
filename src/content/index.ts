@@ -3110,6 +3110,11 @@ function processCues(newCues: Cue[]): void {
  * Start monitoring playback
  */
 function startMonitoring(): void {
+  // Re-show overlay in case it was hidden by a previous stopMonitoring()
+  if (overlayContainer) {
+    overlayContainer.classList.remove("ffprofanity-hidden");
+  }
+
   if (!videoElement) {
     log("startMonitoring: no videoElement, returning");
     return;
@@ -3283,13 +3288,45 @@ function startMonitoring(): void {
 }
 
 /**
- * Stop monitoring playback
+ * Stop monitoring playback and clean up all on-screen state.
+ * Hides the overlay, unmutes the video, and notifies the background
+ * so the tab is not left muted or showing stale subtitles.
  */
 function stopMonitoring(): void {
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId);
     animationFrameId = null;
   }
+
+  // Hide the overlay so stale subtitles don't remain on screen
+  if (overlayContainer) {
+    overlayContainer.classList.add("ffprofanity-hidden");
+  }
+
+  // Unmute if currently muted — mirrors the cleanup in handleSubtitleUnload
+  if (isMuted) {
+    if (videoElement && originalVolume !== null) {
+      videoElement.muted = false;
+      videoElement.volume = originalVolume;
+      originalVolume = null;
+    } else if (videoElement) {
+      videoElement.muted = false;
+    }
+    isMuted = false;
+
+    // Tell background to force-unmute (clear all reasons)
+    try {
+      browser.runtime.sendMessage({
+        type: "unmuteNow",
+        // No reasonId — signals background to use forceUnmuteTab
+      });
+    } catch {
+      warn("Failed to send unmute message during stop - background not ready");
+    }
+  }
+
+  currentProfanityCue = null;
+  currentProfanityWindow = null;
 }
 
 /**

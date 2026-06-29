@@ -488,6 +488,35 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
       }
     }
 
+    case "enable": {
+      // Relay enable to ALL frames in the tab
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
+      try {
+        await sendToAllFrames(tabId, { type: "enable" });
+        return Promise.resolve({ success: true });
+      } catch (err) {
+        error(`Failed to relay enable to tab ${tabId}:`, err);
+        return Promise.resolve({ success: false, error: String(err) });
+      }
+    }
+
+    case "disable": {
+      // Relay disable to ALL frames and release any active tab mute
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
+      try {
+        await sendToAllFrames(tabId, { type: "disable" });
+      } catch (err) {
+        error(`Failed to relay disable to tab ${tabId}:`, err);
+      }
+      // Force-unmute the tab to clear any reference-counted mute state
+      try {
+        await forceUnmuteTab(tabId);
+      } catch (err) {
+        error(`Failed to force-unmute tab ${tabId} on disable:`, err);
+      }
+      return Promise.resolve({ success: true });
+    }
+
     case "fetchUrl": {
       // Proxy fetch through background service worker to bypass CORS restrictions
       // Content scripts can be blocked by CORS; the background has no such restrictions
