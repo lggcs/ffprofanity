@@ -298,6 +298,7 @@ export const RELIGIOUS_WHITELIST = new Set([
   'christian',
   'christianity',
   'damn',
+  'damnable',
   'damned',
   'damnation',
   'lord',

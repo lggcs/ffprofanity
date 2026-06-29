@@ -1214,4 +1214,33 @@ describe('Religious Whitelist', () => {
       expect(detector.detect('God damn it').hasProfanity).toBe(true);
     });
   });
+
+  describe('False positive fixes with production wordlist', () => {
+    it('should allow "damnable" at Low (theological term)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('practice that\'s damnable to hand your').hasProfanity).toBe(false);
+    });
+
+    it('should not flag "naked" (standard English word, removed from wordlist)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('ghost thing and naked and').hasProfanity).toBe(false);
+    });
+
+    it('should still block "damnable" at medium sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('practice that\'s damnable to hand your').hasProfanity).toBe(true);
+    });
+  });
 });

@@ -114,7 +114,6 @@ export const DEFAULT_WORDLIST = [
   "nipple",
   "nipples",
   "nude",
-  "naked",
   "orgasm",
   "penis",
   "piss",
