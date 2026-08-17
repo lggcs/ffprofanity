@@ -335,6 +335,9 @@ const SUBSTITUTIONS: Record<string, string> = {
   '+': 't',
 };
 
+// Pre-compiled single regex for all character substitutions (avoids per-call RegExp construction)
+const SUBSTITUTION_REGEX = new RegExp(`[${Object.keys(SUBSTITUTIONS).map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('')}]`, 'g');
+
 // Obfuscation pattern regexes - match letters with special chars between them
 // Using word boundaries to avoid partial matches
 // Obfuscation characters: underscore, punctuation, symbols - but NOT apostrophes or spaces
@@ -401,11 +404,8 @@ function randomChoice<T>(arr: T[]): T | undefined {
  * Apply character substitutions
  */
 export function normalizeText(text: string): string {
-  let normalized = text.toLowerCase();
-  for (const [sub, replacement] of Object.entries(SUBSTITUTIONS)) {
-    normalized = normalized.replace(new RegExp(`[${sub}]`, 'g'), replacement);
-  }
-  return normalized;
+  const normalized = text.toLowerCase();
+  return normalized.replace(SUBSTITUTION_REGEX, (ch) => SUBSTITUTIONS[ch] || ch);
 }
 
 /**
@@ -460,6 +460,8 @@ export class ProfanityDetector {
   private wordlist: Set<string>;
   private wordlistArray: string[];
   private phrases: string[];  // Multi-word phrases
+  private phraseRegexes: { regex: RegExp; phrase: string }[];  // Pre-compiled phrase regexes
+  private obfuscationRegexes: { regex: RegExp; word: string }[];  // Pre-compiled obfuscation regexes
   private fuzzyThreshold: number;
   private sensitivityThreshold: number;
   private sensitivity: 'low' | 'medium' | 'high';
@@ -490,10 +492,19 @@ export class ProfanityDetector {
     this.phrases = fullConfig.wordlist
       .filter(w => w.includes(' '))
       .map(w => normalizeText(w));
+    this.phraseRegexes = this.phrases.map(phrase => ({
+      regex: new RegExp(`(^|[^a-z'])(${phrase.replace(/\s+/g, '[\\s\\-]+')})(?![a-z'])`, 'gi'),
+      phrase,
+    }));
+    // Pre-compile obfuscation patterns (clone with fresh 'gi' flags for reuse)
+    this.obfuscationRegexes = OBFUSCATION_PATTERNS.map(({ pattern, word }) => ({
+      regex: new RegExp(pattern.source, 'gi'),
+      word,
+    }));
+    this.customPatterns = [...OBFUSCATION_PATTERNS];
     this.fuzzyThreshold = fullConfig.fuzzyThreshold;
     this.sensitivityThreshold = SENSITIVITY_THRESHOLDS[fullConfig.sensitivity];
     this.sensitivity = fullConfig.sensitivity;
-    this.customPatterns = [...OBFUSCATION_PATTERNS];
     this.useFuzzyMatching = fullConfig.useFuzzyMatching;
     this.useContextFiltering = fullConfig.useContextFiltering;
     this.useSubstitutions = fullConfig.useSubstitutions;
@@ -514,6 +525,7 @@ export class ProfanityDetector {
       }
     }
     this.wordlistArray = Array.from(this.wordlist);
+    this.rebuildPhraseRegexes();
   }
 
   /**
@@ -527,6 +539,17 @@ export class ProfanityDetector {
       this.phrases = this.phrases.filter(p => p !== normalized);
     }
     this.wordlistArray = Array.from(this.wordlist);
+    this.rebuildPhraseRegexes();
+  }
+
+  /**
+   * Rebuild pre-compiled phrase regexes from current phrases list
+   */
+  private rebuildPhraseRegexes(): void {
+    this.phraseRegexes = this.phrases.map(phrase => ({
+      regex: new RegExp(`(^|[^a-z'])(${phrase.replace(/\s+/g, '[\\s\\-]+')})(?![a-z'])`, 'gi'),
+      phrase,
+    }));
   }
 
   /**
@@ -695,15 +718,11 @@ export class ProfanityDetector {
    */
   detect(text: string): DetectionResult {
     const matches: ProfanityMatch[] = [];
-    const normalizedText = normalizeText(text);
     const matchedRanges: Array<{ start: number; end: number }> = [];
 
     // Check for multi-word phrases FIRST (before individual words)
-    for (const phrase of this.phrases) {
-      // Create regex that matches the phrase with flexible whitespace
-      // Use word boundaries at start and end of the whole phrase
-      const phrasePattern = phrase.replace(/\s+/g, '[\\s\\-]+');
-      const phraseRegex = new RegExp(`(^|[^a-z'])(${phrasePattern})(?![a-z'])`, 'gi');
+    for (const { regex: phraseRegex, phrase } of this.phraseRegexes) {
+      phraseRegex.lastIndex = 0; // Reset for reuse
       let match;
       while ((match = phraseRegex.exec(text)) !== null) {
         // The actual match starts after the prefix group
@@ -732,9 +751,9 @@ export class ProfanityDetector {
     }
 
     // Check obfuscation patterns
-    for (const { pattern, word } of this.customPatterns) {
+    for (const { regex, word } of this.obfuscationRegexes) {
+      regex.lastIndex = 0; // Reset for reuse
       let match;
-      const regex = new RegExp(pattern.source, 'gi');
       while ((match = regex.exec(text)) !== null) {
         // Skip if this match overlaps with an already-matched phrase
         const overlapsWithPhrase = matchedRanges.some(

@@ -22,6 +22,7 @@ export class CueIndex {
   private sortedByStart: CueNode[] = [];
   private profanityCues: CueNode[] = []; // Sorted list of profanity-only cues
   private profanityWindows: ProfanityWindow[] = []; // Flat list of all windows
+  private cueById: Map<number, Cue> = new Map(); // O(1) cue lookup by ID
 
   /**
    * Build index from cue list
@@ -31,6 +32,9 @@ export class CueIndex {
     this.sortedByStart = cues
       .map(cue => ({ cue, start: cue.startMs, end: cue.endMs }))
       .sort((a, b) => a.start - b.start);
+
+    // Build O(1) lookup map by cue ID
+    this.cueById = new Map(cues.map(c => [c.id, c]));
 
     // Build separate index for profanity cues (for faster mute lookups)
     this.profanityCues = cues
@@ -104,15 +108,26 @@ export class CueIndex {
    */
   getNextCues(timestampMs: number, count: number, offsetMs: number = 0): Cue[] {
     const adjustedTime = timestampMs + offsetMs;
-    const next: Cue[] = [];
-    
-    for (const node of this.sortedByStart) {
-      if (node.start > adjustedTime && next.length < count) {
-        next.push(node.cue);
+
+    // Binary search for first cue starting after adjustedTime
+    let low = 0;
+    let high = this.sortedByStart.length - 1;
+    let startIdx = this.sortedByStart.length; // Default: no cues after
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      if (this.sortedByStart[mid].start > adjustedTime) {
+        startIdx = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
       }
     }
-    
-    return next;
+
+    // Slice the next `count` cues from the starting index
+    return this.sortedByStart
+      .slice(startIdx, startIdx + count)
+      .map(node => node.cue);
   }
   
   /**
@@ -130,6 +145,13 @@ export class CueIndex {
   getCueCount(): number {
     return this.cues.length;
   }
+
+  /**
+   * Get count of profanity cues
+   */
+  getProfanityCueCount(): number {
+    return this.profanityCues.length;
+  }
   
   /**
    * Clear index
@@ -139,6 +161,7 @@ export class CueIndex {
     this.sortedByStart = [];
     this.profanityCues = [];
     this.profanityWindows = [];
+    this.cueById.clear();
   }
 
   /**
@@ -249,7 +272,7 @@ export class CueIndex {
     } else {
       const window = this.findProfanityWindow(timestampMs, offsetMs);
       if (window) {
-        const cue = this.cues.find(c => c.id === window.cueId) || null;
+        const cue = this.cueById.get(window.cueId) || null;
         return { shouldMute: true, window, cue };
       }
       return { shouldMute: false, window: null, cue: null };

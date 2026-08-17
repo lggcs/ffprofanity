@@ -1876,7 +1876,7 @@ function handleVideoSeeked(): void {
   );
 
   // Debug: show seek info
-  const profanityCount = cues.filter((c) => c.hasProfanity).length;
+  const profanityCount = cueIndex.getProfanityCueCount();
   log(
     `SEEK to ${videoElement.currentTime.toFixed(2)}s (${currentTimeMs}ms), offset: ${settings.offsetMs}ms, total cues: ${cues.length}, profanity cues: ${profanityCount}`,
   );
@@ -2571,7 +2571,7 @@ async function handleMessage(message: unknown): Promise<unknown> {
       return Promise.resolve({
         active: isActive,
         cueCount: cues.length,
-        profanityCount: cues.filter((c) => c.hasProfanity).length,
+        profanityCount: cueIndex.getProfanityCueCount(),
         hasVideo: !!videoElement,
         currentTrack,
         detectedTracks,
@@ -3017,7 +3017,6 @@ function processCues(newCues: Cue[]): void {
     );
     if (uniqueNewCues.length > 0) {
       cues = [...cues, ...uniqueNewCues];
-      cues.sort((a, b) => a.startMs - b.startMs);
     }
   } else if (isSyncedSource && cues.length > 0 && processedNewCues.length > 100) {
     // Check timing overlap: if ranges overlap significantly, this is likely a replacement
@@ -3056,7 +3055,21 @@ function processCues(newCues: Cue[]): void {
   }
 
   // Sort by start time
-  cues.sort((a, b) => a.startMs - b.startMs);
+  // Both `cues` and `processedNewCues` are already sorted by startMs,
+  // so a merge is O(n+m) instead of O((n+m) log (n+m)) for a full sort.
+  // Only fall back to sort if the array isn't already sorted (e.g., replacement path).
+  if (cues.length > 1) {
+    let isSorted = true;
+    for (let i = 1; i < cues.length; i++) {
+      if (cues[i].startMs < cues[i - 1].startMs) {
+        isSorted = false;
+        break;
+      }
+    }
+    if (!isSorted) {
+      cues.sort((a, b) => a.startMs - b.startMs);
+    }
+  }
 
   // For static subtitle files, keep all cues - no limit needed
   // The comment about "last 5 minutes" was incorrect; we need ALL cues
@@ -3067,11 +3080,12 @@ function processCues(newCues: Cue[]): void {
   cueIndex.build(cues);
 
   // Log summary
-  const profanityCues = cues.filter((c) => c.hasProfanity);
+  const profanityCueCount = cueIndex.getProfanityCueCount();
   log(
-    `Processed ${cues.length} cues, ${profanityCues.length} with profanity`,
+    `Processed ${cues.length} cues, ${profanityCueCount} with profanity`,
   );
-  if (settings.sensitivity !== "high" && profanityCues.length > 0) {
+  if (settings.sensitivity !== "high" && profanityCueCount > 0) {
+    const profanityCues = cues.filter((c) => c.hasProfanity);
     const windowCount = profanityCues.reduce(
       (sum, c) => sum + (c.profanityWindows?.length || 0),
       0,
@@ -3079,10 +3093,8 @@ function processCues(newCues: Cue[]): void {
     log(
       `Computed ${windowCount} profanity windows for sensitivity '${settings.sensitivity}'`,
     );
-  }
 
-  // Log first few profanity cues for verification (with timestamps)
-  if (profanityCues.length > 0) {
+    // Log first few profanity cues for verification (with timestamps)
     log(
       "First 10 profanity cues:",
       profanityCues.slice(0, 10).map((c) => ({
@@ -3179,6 +3191,13 @@ function startMonitoring(): void {
     // Stop if not active
     if (!isActive) {
       animationFrameId = null;
+      return;
+    }
+
+    // Skip expensive work when video is paused — time isn't advancing
+    // Still keep the RAF loop alive to detect when playback resumes
+    if (videoElement?.paused) {
+      animationFrameId = requestAnimationFrame(updateLoop);
       return;
     }
 
