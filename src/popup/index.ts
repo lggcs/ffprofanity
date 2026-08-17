@@ -98,6 +98,11 @@ function setupEventHandlers(): void {
   showProfanityOnlyCheckbox.addEventListener("change", () => {
     updatePopupUpcomingCuesState();
   });
+
+  // Show/hide upcoming count when upcoming cues toggled
+  showUpcomingCheckbox.addEventListener("change", () => {
+    updatePopupUpcomingCuesState();
+  });
 }
 
 function updatePopupUpcomingCuesState(): void {
@@ -105,6 +110,12 @@ function updatePopupUpcomingCuesState(): void {
   showUpcomingCheckbox.disabled = isProfanityOnly;
   if (isProfanityOnly) {
     showUpcomingCheckbox.checked = false;
+  }
+  // Show/hide upcoming count section based on whether upcoming cues are enabled
+  const upcomingCountSection = document.getElementById("upcomingCountSection");
+  if (upcomingCountSection) {
+    upcomingCountSection.style.display =
+      showUpcomingCheckbox.checked && !isProfanityOnly ? "block" : "none";
   }
 }
 
@@ -151,6 +162,12 @@ async function loadSettings(): Promise<void> {
     backgroundColorText.value = bgColor;
     backgroundOpacitySlider.value = String(bgOpacity);
     opacityValue.textContent = `${bgOpacity}%`;
+
+    // Load upcoming cues count
+    const upcomingCuesCountSelect = document.getElementById("upcomingCuesCount") as HTMLSelectElement;
+    if (upcomingCuesCountSelect) {
+      upcomingCuesCountSelect.value = String(settings.upcomingCuesCount ?? 2);
+    }
 
     // Show/hide category select based on substitutions checkbox
     substitutionCategorySelect.classList.toggle("hidden", !useSubstitutionsCheckbox.checked);
@@ -219,6 +236,10 @@ async function saveSettings(): Promise<void> {
       fontColor: fontColorInput.value,
       backgroundColor: backgroundColorInput.value,
       backgroundOpacity: parseInt(backgroundOpacitySlider.value, 10),
+      upcomingCuesCount: parseInt(
+        (document.getElementById("upcomingCuesCount") as HTMLSelectElement).value,
+        10,
+      ),
     };
 
     // Save to storage
@@ -230,13 +251,15 @@ async function saveSettings(): Promise<void> {
       },
     });
 
-    // Notify content script of settings change
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tab.id) {
-      await browser.tabs.sendMessage(tab.id, {
-        type: "updateSettings",
-        settings: newSettings,
-      });
+    // Notify content scripts in all tabs of settings change
+    const tabs = await browser.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, {
+          type: "updateSettings",
+          settings: newSettings,
+        }).catch(() => {}); // Ignore errors for inactive tabs
+      }
     }
 
     // Show success notification briefly
