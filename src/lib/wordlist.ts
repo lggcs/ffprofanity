@@ -23,7 +23,6 @@ export const DEFAULT_WORDLIST = [
   "asswipes",
   "badass",
   "badasses",
-  "bad-ass",
   "ballsack",
   "bastard",
   "bastards",

@@ -1309,6 +1309,33 @@ describe('Religious Whitelist', () => {
       const result = detector.detect('Badass.');
       expect(result.hasProfanity).toBe(true);
     });
+
+    it('should not false-positive on "landlord" (contains "lord")', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('The landlord is here.').hasProfanity).toBe(false);
+    });
+
+    it('should not false-positive on "lordship" (contains "lord")', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('His lordship demands respect.').hasProfanity).toBe(false);
+    });
+
+    it('should not false-positive on "lordly" (contains "lord")', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      expect(detector.detect('He walked in a lordly manner.').hasProfanity).toBe(false);
+    });
   });
 
   describe('Constructor substitution defaults', () => {
