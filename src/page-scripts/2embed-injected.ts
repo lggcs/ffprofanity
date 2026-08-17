@@ -99,7 +99,7 @@ function monitorVideoTextTracks(): void {
 
   const check = () => {
     try {
-      const videos = document.querySelectorAll("video");
+      const videos = Array.from(document.querySelectorAll("video"));
       for (const video of videos) {
         if (!video.textTracks || video.textTracks.length === 0) continue;
 
@@ -146,7 +146,7 @@ function watchForVideoElement(): void {
   const observer = new MutationObserver((mutations) => {
     let foundVideo = false;
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         if (node instanceof HTMLVideoElement) {
           foundVideo = true;
         } else if (node instanceof HTMLElement && node.querySelector("video")) {

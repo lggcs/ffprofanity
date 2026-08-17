@@ -382,6 +382,7 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
     case "frameStatus": {
       // Content script (from any frame) reports its status
       // This allows us to track which frames have videos
+      if (!tabId) return Promise.resolve({ success: false, error: "No tabId" });
       const frameStatus = msg as {
         hasVideo: boolean;
         active: boolean;
@@ -431,6 +432,7 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
     }
 
     case "getDetectedTracks": {
+      if (!tabId) return Promise.resolve({ type: "detectedTracks", tracks: [], tabId: 0 });
       const tracks = detectedSubtitles.get(tabId) || [];
       return Promise.resolve({
         type: "detectedTracks",
@@ -440,7 +442,7 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
     }
 
     case "clearDetectedTracks": {
-      detectedSubtitles.delete(tabId);
+      if (tabId) detectedSubtitles.delete(tabId);
       return Promise.resolve({ success: true });
     }
 
@@ -699,7 +701,7 @@ const corsHeadersOriginOnly = [
   },
 ];
 
-const subtitleCorsAddRules = subtitleCorsRules.flatMap(([id, ext]) => [
+const subtitleCorsAddRules: browser.declarativeNetRequest.Rule[] = subtitleCorsRules.flatMap(([id, ext]) => [
   {
     id,
     priority: 1,

@@ -19,6 +19,7 @@ import {
   type SubstitutionMapping,
 } from './substitutions';
 import type { ProfanityWindow } from '../types';
+export type { ProfanityWindow };
 
 /**
  * Count syllables in an English word using heuristic rules
@@ -723,8 +724,8 @@ export class ProfanityDetector {
     // Check for multi-word phrases FIRST (before individual words)
     for (const { regex: phraseRegex, phrase } of this.phraseRegexes) {
       phraseRegex.lastIndex = 0; // Reset for reuse
-      let match;
-      while ((match = phraseRegex.exec(text)) !== null) {
+      for (let m: RegExpExecArray | null = phraseRegex.exec(text); m !== null; m = phraseRegex.exec(text)) {
+        const match = m;
         // The actual match starts after the prefix group
         const actualStart = match.index + match[1].length;
         const actualEnd = actualStart + match[2].length;
@@ -753,8 +754,8 @@ export class ProfanityDetector {
     // Check obfuscation patterns
     for (const { regex, word } of this.obfuscationRegexes) {
       regex.lastIndex = 0; // Reset for reuse
-      let match;
-      while ((match = regex.exec(text)) !== null) {
+      for (let m: RegExpExecArray | null = regex.exec(text); m !== null; m = regex.exec(text)) {
+        const match = m;
         // Skip if this match overlaps with an already-matched phrase
         const overlapsWithPhrase = matchedRanges.some(
           range => (match.index >= range.start && match.index < range.end) ||

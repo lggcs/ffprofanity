@@ -184,9 +184,9 @@ function extractFromFluidPlayer(): SubtitleTrack[] {
     }
 
     // Check DOM for fluid player wrappers
-    const wrappers = document.querySelectorAll(
+    const wrappers = Array.from(document.querySelectorAll(
       ".fluid_video_wrapper, .mainplayer",
-    );
+    ));
     for (const wrapper of wrappers) {
       const video = wrapper.querySelector("video");
       if (video) {
@@ -236,7 +236,7 @@ function extractFromNextData(): SubtitleTrack[] {
 function monitorVideoTextTracks(): void {
   const checkTextTracks = () => {
     try {
-      const videos = document.querySelectorAll("video");
+      const videos = Array.from(document.querySelectorAll("video"));
       for (const video of videos) {
         if (video.textTracks && video.textTracks.length > 0) {
           for (let i = 0; i < video.textTracks.length; i++) {
@@ -304,7 +304,7 @@ function init() {
   const videoObserver = new MutationObserver((mutations) => {
     let foundNew = false;
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         if (node instanceof HTMLVideoElement) {
           foundNew = true;
         } else if (node instanceof HTMLElement) {

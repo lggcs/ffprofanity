@@ -64,11 +64,11 @@ function uniqueSendSubtitles(subs: SubtitleTrack[], source: string): void {
 // Fandango uses kind="metadata" instead of kind="subtitles"/"captions"
 function extractMetadataTracks(): SubtitleTrack[] {
   const subs: SubtitleTrack[] = [];
-  const videos = document.querySelectorAll("video");
+  const videos = Array.from(document.querySelectorAll("video"));
 
   for (const video of videos) {
     // Look for ALL track elements, including kind="metadata"
-    const trackElements = video.querySelectorAll("track");
+    const trackElements = Array.from(video.querySelectorAll("track"));
     for (const track of trackElements) {
       const url = track.src;
       if (!url) continue;
@@ -84,7 +84,7 @@ function extractMetadataTracks(): SubtitleTrack[] {
     }
 
     // Also check for id="vudu" which is Fandango's convention
-    const vuduTrack = video.querySelector('track#vudu');
+    const vuduTrack = video.querySelector('track#vudu') as HTMLTrackElement | null;
     if (vuduTrack && vuduTrack.src && !sentUrls.has(vuduTrack.src)) {
       const url = vuduTrack.src;
       const lang = vuduTrack.srclang || extractLanguageFromUrl(url) || "en";
@@ -114,7 +114,7 @@ function extractFromShakaPlayer(): SubtitleTrack[] {
     }
 
     // Look for Shaka player instances attached to video elements
-    const videos = document.querySelectorAll("video");
+    const videos = Array.from(document.querySelectorAll("video"));
     for (const video of videos) {
       // Shaka stores the player reference on the video element
       const shakaRef = (video as any).shakaPlayer ||
@@ -232,7 +232,7 @@ function setupNetworkInterception(): void {
       log(`Intercepted cc.vudu.com VTT: ${url}`);
       try {
         const clone = response.clone();
-        clone.text().then((text) => {
+        clone.text().then((text: string) => {
           if (text.includes("-->")) {
             const lang = extractLanguageFromUrl(url) || "en";
             const label = getLanguageName(lang);
@@ -302,7 +302,7 @@ function monitorVideoTextTracks(): void {
 
   const check = () => {
     try {
-      const videos = document.querySelectorAll("video");
+      const videos = Array.from(document.querySelectorAll("video"));
       for (const video of videos) {
         if (!video.textTracks || video.textTracks.length === 0) continue;
 
@@ -362,7 +362,7 @@ function watchForDynamicElements(): void {
     let foundNew = false;
 
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         if (node instanceof HTMLVideoElement) {
           foundNew = true;
         } else if (node instanceof HTMLElement) {

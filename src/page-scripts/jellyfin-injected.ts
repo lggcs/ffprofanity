@@ -94,7 +94,7 @@ function interceptXHRPlaybackInfo(): void {
     url: string,
   ): XMLHttpRequest {
     (this as any)._ffprofanity_url = url;
-    return nativeOpen.apply(this, arguments as any) as XMLHttpRequest;
+    return nativeOpen.apply(this, arguments as any) as unknown as XMLHttpRequest;
   };
 
   XMLHttpRequest.prototype.send = function (): void {
@@ -152,7 +152,7 @@ function interceptXHRPlaybackInfo(): void {
 function monitorVideoTextTracks(): void {
   const checkTextTracks = () => {
     try {
-      const videos = document.querySelectorAll("video");
+      const videos = Array.from(document.querySelectorAll("video"));
       for (const video of videos) {
         if (video.textTracks && video.textTracks.length > 0) {
           for (let i = 0; i < video.textTracks.length; i++) {
@@ -260,7 +260,7 @@ function hideNativeSubtitles(): void {
   };
 
   const disableVideoTextTracks = () => {
-    const videos = document.querySelectorAll("video");
+    const videos = Array.from(document.querySelectorAll("video"));
     for (const video of videos) {
       if (video.textTracks) {
         for (let i = 0; i < video.textTracks.length; i++) {
@@ -303,7 +303,7 @@ function watchForPlayer(): void {
     let foundVideo = false;
 
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         if (node instanceof HTMLElement) {
           if (node.tagName === "VIDEO" || node.querySelector("video")) {
             foundVideo = true;

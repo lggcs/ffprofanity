@@ -243,20 +243,21 @@ function plutoTVPageScript(): void {
 
           const cues = Array.from(track.cues);
           for (const cue of cues) {
-            const cueId = `${cue.startTime}-${cue.endTime}-${cue.text.substring(0, 20)}`;
+            const vttCue = cue as VTTCue;
+            const cueId = `${vttCue.startTime}-${vttCue.endTime}-${vttCue.text.substring(0, 20)}`;
             if (trackedCues.has(cueId)) continue;
             trackedCues.add(cueId);
 
-            const startHrs = Math.floor(cue.startTime / 3600);
-            const startMins = Math.floor((cue.startTime % 3600) / 60);
-            const startSecs = (cue.startTime % 60).toFixed(3);
-            const endHrs = Math.floor(cue.endTime / 3600);
-            const endMins = Math.floor((cue.endTime % 3600) / 60);
-            const endSecs = (cue.endTime % 60).toFixed(3);
+            const startHrs = Math.floor(vttCue.startTime / 3600);
+            const startMins = Math.floor((vttCue.startTime % 3600) / 60);
+            const startSecs = (vttCue.startTime % 60).toFixed(3);
+            const endHrs = Math.floor(vttCue.endTime / 3600);
+            const endMins = Math.floor((vttCue.endTime % 3600) / 60);
+            const endSecs = (vttCue.endTime % 60).toFixed(3);
 
-            const vttCue = `${String(startHrs).padStart(2, "0")}:${String(startMins).padStart(2, "0")}:${startSecs} --> ${String(endHrs).padStart(2, "0")}:${String(endMins).padStart(2, "0")}:${endSecs}\n${cue.text}`;
+            const cueText = `${String(startHrs).padStart(2, "0")}:${String(startMins).padStart(2, "0")}:${startSecs} --> ${String(endHrs).padStart(2, "0")}:${String(endMins).padStart(2, "0")}:${endSecs}\n${vttCue.text}`;
 
-            log("Captured cue from textTracks:", cue.startTime.toFixed(2), "-", cue.endTime.toFixed(2), cue.text.substring(0, 30));
+            log("Captured cue from textTracks:", vttCue.startTime.toFixed(2), "-", vttCue.endTime.toFixed(2), vttCue.text.substring(0, 30));
 
             window.postMessage(
               {
@@ -264,10 +265,10 @@ function plutoTVPageScript(): void {
                 source: "plutotv.texttracks",
                 language: track.language || "en",
                 label: track.label || track.language || "English",
-                cue: vttCue,
-                startTime: cue.startTime,
-                endTime: cue.endTime,
-                text: cue.text,
+                cue: cueText,
+                startTime: vttCue.startTime,
+                endTime: vttCue.endTime,
+                text: vttCue.text,
               },
               "*",
             );

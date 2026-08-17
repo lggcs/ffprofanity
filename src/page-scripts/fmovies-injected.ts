@@ -80,7 +80,7 @@ function interceptXHRSubtitles(): void {
     url: string,
   ): XMLHttpRequest {
     (this as any)._ffprofanity_url = url;
-    return nativeOpen.apply(this, arguments as any) as XMLHttpRequest;
+    return nativeOpen.apply(this, arguments as any) as unknown as XMLHttpRequest;
   };
 
   XMLHttpRequest.prototype.send = function (): void {
@@ -113,7 +113,7 @@ function monitorVideoTextTracks(): void {
 
   const checkTextTracks = () => {
     try {
-      const videos = document.querySelectorAll("video");
+      const videos = Array.from(document.querySelectorAll("video"));
       for (const video of videos) {
         if (video.textTracks && video.textTracks.length > 0) {
           for (let i = 0; i < video.textTracks.length; i++) {
@@ -170,7 +170,7 @@ function setupAutoCCSelection(): void {
   const findAndClickEnglishCC = () => {
     if (ccAutoClicked) return false;
 
-    const ccBadges = document.querySelectorAll('div[style*="rgba(97, 218, 251"]');
+    const ccBadges = Array.from(document.querySelectorAll('div[style*="rgba(97, 218, 251"]'));
     for (const badge of ccBadges) {
       if (badge.textContent?.trim() !== "CC") continue;
 
@@ -198,7 +198,7 @@ function setupAutoCCSelection(): void {
     }
 
     // Alternative: Look for language items with "en" code
-    const langItems = document.querySelectorAll('.text-\\[11px\\].text-white\\/50');
+    const langItems = Array.from(document.querySelectorAll('.text-\\[11px\\].text-white\\/50'));
     for (const item of langItems) {
       if (item.textContent?.trim().toLowerCase() === "en") {
         const parent = item.closest(".flex.items-center");
@@ -227,7 +227,7 @@ function setupAutoCCSelection(): void {
 
   const modalObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
+      for (const node of Array.from(mutation.addedNodes)) {
         if (node instanceof HTMLElement) {
           if (
             node.classList.contains("modal") ||
@@ -275,7 +275,7 @@ function setupAutoCCSelection(): void {
 
 function hideNativeSubtitles(): void {
   const disableVideoTextTracks = () => {
-    const videos = document.querySelectorAll("video");
+    const videos = Array.from(document.querySelectorAll("video"));
     for (const video of videos) {
       if (video.textTracks) {
         for (let i = 0; i < video.textTracks.length; i++) {
