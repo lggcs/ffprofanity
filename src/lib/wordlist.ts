@@ -69,6 +69,7 @@ export const DEFAULT_WORDLIST = [
   "dickweed",
   "dildo",
   "dildos",
+  "douche",
   "douchebag",
   "fag",
   "faggot",

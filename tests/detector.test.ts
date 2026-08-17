@@ -1338,6 +1338,50 @@ describe('Religious Whitelist', () => {
     });
   });
 
+  describe('New wordlist entry (douche)', () => {
+    it('should detect "douche" at medium sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+      expect(detector.detect('What a douche.').hasProfanity).toBe(true);
+    });
+
+    it('should detect "douche" in a two-word phrase "douche bag"', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+      // Tokenizer splits on hyphens/spaces, so "douche bag" -> ["douche", "bag"]
+      // "douche" is in the wordlist, "bag" is not
+      expect(detector.detect('He is such a douche bag.').hasProfanity).toBe(true);
+    });
+
+    it('should detect "douche-bag" (hyphenated)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+      expect(detector.detect('What a douche-bag.').hasProfanity).toBe(true);
+    });
+
+    it('should detect "douchebag" (compound, already in wordlist)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+        useSubstitutions: false,
+      });
+      expect(detector.detect('He is a douchebag.').hasProfanity).toBe(true);
+    });
+  });
+
   describe('Constructor substitution defaults', () => {
     it('should default to useSubstitutions: true and monkeys category', () => {
       const detector = new ProfanityDetector({
