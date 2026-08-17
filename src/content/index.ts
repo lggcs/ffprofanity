@@ -190,6 +190,8 @@ async function init(): Promise<void> {
         new Map(Object.entries(settings.customSubstitutions)),
       );
     }
+  } else {
+    detector.setSubstitutions(false);
   }
 
   // Initialize cue index
@@ -2374,6 +2376,8 @@ function handleStorageChange(
           new Map(Object.entries(settings.customSubstitutions)),
         );
       }
+    } else {
+      detector.setSubstitutions(false);
     }
 
     // Re-compute profanity windows if sensitivity changed

@@ -102,6 +102,7 @@ describe('ProfanityDetector', () => {
       sensitivity: 'medium',
       useFuzzyMatching: true,
       useContextFiltering: false, // Disable for basic tests
+      useSubstitutions: false,
     });
 
     it('should detect exact profanity matches', () => {
@@ -248,7 +249,8 @@ describe('ProfanityDetector', () => {
     const detector = new ProfanityDetector({
       wordlist: ['badword', 'anotherbadword'],
       fuzzyThreshold: 0.25,
-      sensitivity: 'medium'
+      sensitivity: 'medium',
+      useSubstitutions: false,
     });
 
     it('should detect custom words', () => {
@@ -304,6 +306,7 @@ describe('ProfanityDetector', () => {
       fuzzyThreshold: 0.25,
       sensitivity: 'medium',
       useContextFiltering: false,
+      useSubstitutions: false,
     });
 
     it('should replace profanity with [CENSORED]', () => {
@@ -1241,6 +1244,142 @@ describe('Religious Whitelist', () => {
         useContextFiltering: false,
       });
       expect(detector.detect('practice that\'s damnable to hand your').hasProfanity).toBe(true);
+    });
+  });
+
+  describe('New wordlist entries (badass, lord)', () => {
+    it('should detect "badass" at medium sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('Badass.');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.length).toBeGreaterThan(0);
+    });
+
+    it('should detect "badass" in a sentence', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('He sounds like a badass.');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should detect "badasses" (plural)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('They are badasses.');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should detect "lord" at medium sensitivity', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('Oh, lord!');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.matches.some(m => m.word.toLowerCase() === 'lord')).toBe(true);
+    });
+
+    it('should allow "lord" at low sensitivity (religious whitelist)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('Oh, lord!');
+      expect(result.hasProfanity).toBe(false);
+    });
+
+    it('should detect "badass" at low sensitivity (not in religious whitelist)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'low',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('Badass.');
+      expect(result.hasProfanity).toBe(true);
+    });
+  });
+
+  describe('Constructor substitution defaults', () => {
+    it('should default to useSubstitutions: true and monkeys category', () => {
+      const detector = new ProfanityDetector({
+        wordlist: ['fuck'],
+        sensitivity: 'medium',
+        useContextFiltering: false,
+      });
+      const result = detector.detect('What the fuck!');
+      expect(result.hasProfanity).toBe(true);
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'];
+      const replacement = result.censoredText.replace('What the ', '').replace('!', '');
+      expect(MONKEY_EMOJIS).toContain(replacement);
+    });
+
+    it('should produce monkey emojis via createDetector() by default', () => {
+      const detector = createDetector();
+      const result = detector.detect('What the hell!');
+      expect(result.hasProfanity).toBe(true);
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'];
+      const replacement = result.censoredText.replace('What the ', '').replace('!', '');
+      expect(MONKEY_EMOJIS).toContain(replacement);
+    });
+  });
+
+  describe('Jumanji SRT scenarios', () => {
+    it('should detect profanity in "Badass." from SRT line 632', () => {
+      const detector = createDetector();
+      const result = detector.detect('Badass.');
+      expect(result.hasProfanity).toBe(true);
+    });
+
+    it('should detect profanity in "Oh, my God!" from SRT', () => {
+      const detector = createDetector();
+      const result = detector.detect('Oh, my God!');
+      expect(result.hasProfanity).toBe(true);
+      const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'];
+      // Should have monkey emoji, not [CENSORED]
+      expect(result.censoredText).not.toContain('[CENSORED]');
+    });
+
+    it('should detect profanity in "Oh, thank God." from SRT', () => {
+      const detector = createDetector();
+      const result = detector.detect('Oh, thank God.');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).not.toContain('[CENSORED]');
+    });
+
+    it('should use monkey emojis not [CENSORED] for "What the hell, man?"', () => {
+      const detector = createDetector();
+      const result = detector.detect('What the hell, man?');
+      expect(result.hasProfanity).toBe(true);
+      expect(result.censoredText).not.toContain('[CENSORED]');
+    });
+
+    it('should not produce [CENSORED] for any common profanity with default settings', () => {
+      const detector = createDetector();
+      const phrases = [
+        'What the hell, man?',
+        'Damn it!',
+        'Oh, my God!',
+        'Badass.',
+        'Oh, lord!',
+      ];
+      for (const phrase of phrases) {
+        const result = detector.detect(phrase);
+        if (result.hasProfanity) {
+          expect(result.censoredText).not.toContain('[CENSORED]');
+        }
+      }
     });
   });
 });

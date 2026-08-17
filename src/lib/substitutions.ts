@@ -210,6 +210,22 @@ export const DEFAULT_SUBSTITUTIONS: SubstitutionMapping[] = [
     },
   },
   {
+    profanity: 'lord',
+    substitutions: {
+      silly: ['gosh', 'golly', 'goodness', 'gracious me'],
+      polite: ['goodness', 'gracious'],
+      random: ['banana', 'noodle'],
+    },
+  },
+  {
+    profanity: 'badass',
+    substitutions: {
+      silly: ['coolcat', 'toughguy', 'braveheart', 'superkid'],
+      polite: ['tough one', 'brave one'],
+      random: ['banana', 'noodle', 'wombat'],
+    },
+  },
+  {
     profanity: 'gods',
     substitutions: {
       silly: ['goshes', 'gollies', 'deities', 'divinities'],

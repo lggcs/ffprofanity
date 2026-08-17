@@ -479,8 +479,8 @@ export class ProfanityDetector {
       sensitivity: 'medium',
       useFuzzyMatching: false,
       useContextFiltering: true,
-      useSubstitutions: false,
-      substitutionCategory: 'silly',
+      useSubstitutions: true,
+      substitutionCategory: 'monkeys',
       customSubstitutions: new Map(),
       ...config,
     };
