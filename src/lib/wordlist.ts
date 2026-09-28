@@ -140,6 +140,8 @@ export const DEFAULT_WORDLIST = [
   "shit",
   "shits",
   "shitted",
+  "shitter",
+  "shitters",
   "shitting",
   "shitty",
   "shut up",

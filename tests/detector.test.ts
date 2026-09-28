@@ -1141,6 +1141,16 @@ describe('Religious Whitelist', () => {
 
   describe('Religious compound profanity with production wordlist', () => {
     // These tests use DEFAULT_WORDLIST to test real-world behavior
+    it('should detect "shitter" with production wordlist (derived profane form)', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        sensitivity: 'medium',
+        useContextFiltering: true,
+      });
+      const result = detector.detect("That's one king size can opener ready for the shitter.");
+      expect(result.hasProfanity).toBe(true);
+    });
+
     it('should allow "Jesus Christ came to saved damned souls from Hell" at Low', () => {
       const detector = new ProfanityDetector({
         wordlist: DEFAULT_WORDLIST,
