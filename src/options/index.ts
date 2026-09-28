@@ -39,6 +39,7 @@ let positionSelect: HTMLSelectElement;
 let displayPreviewContainer: HTMLDivElement;
 let previewSubtitle: HTMLDivElement;
 let previewUpcoming: HTMLDivElement;
+let autoDriftCheckbox: HTMLInputElement;
 
 // Current cues
 let cueCount = 0;
@@ -79,6 +80,7 @@ async function init(): Promise<void> {
   displayPreviewContainer = document.getElementById('previewContainer') as HTMLDivElement;
   previewSubtitle = document.getElementById('previewSubtitle') as HTMLDivElement;
   previewUpcoming = document.getElementById('previewUpcoming') as HTMLDivElement;
+  autoDriftCheckbox = document.getElementById('autoDriftCorrection') as HTMLInputElement;
 
   // Load current settings
   await loadSettings();
@@ -89,6 +91,7 @@ async function init(): Promise<void> {
   saveWordlistBtn.addEventListener('click', handleSaveWordlist);
   resetWordlistBtn.addEventListener('click', handleResetWordlist);
   sensitivitySelect.addEventListener('change', () => autoSaveSettings());
+  autoDriftCheckbox.addEventListener('change', () => autoSaveSettings());
   document.getElementById('save')?.addEventListener('click', saveAllSettings);
   document.getElementById('reset')?.addEventListener('click', resetSettings);
 
@@ -130,6 +133,9 @@ async function loadSettings(): Promise<void> {
 
   // Set sensitivity
   sensitivitySelect.value = settings.sensitivity;
+
+  // Set automatic sync correction
+  autoDriftCheckbox.checked = settings.autoDriftCorrection ?? true;
 
   // Set wordlist
   wordlistTextarea.value = settings.wordlist.join('\n');
@@ -483,6 +489,7 @@ async function saveAllSettings(): Promise<void> {
   const settings: Partial<Settings> = {
     offsetMs: parseInt(offsetSlider.value, 10),
     sensitivity: sensitivitySelect.value as Settings['sensitivity'],
+    autoDriftCorrection: autoDriftCheckbox.checked,
     useSubstitutions: useSubstitutionsCheckbox.checked,
     substitutionCategory: categorySelect.value as Settings['substitutionCategory'],
     customSubstitutions,

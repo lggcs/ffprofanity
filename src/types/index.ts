@@ -82,6 +82,7 @@ export interface Settings {
   preferredLanguage: string;  // User's preferred subtitle language
   preferSDH: boolean;          // Prefer SDH/CC tracks
   autoSelectTrack: boolean;    // Auto-select best detected track
+  autoDriftCorrection: boolean; // Auto-capture sync anchors from the site's own subtitle track
   // Substitution settings
   useSubstitutions: boolean;   // Use fun substitutions instead of [CENSORED]
   substitutionCategory: 'silly' | 'polite' | 'random' | 'monkeys' | 'custom';

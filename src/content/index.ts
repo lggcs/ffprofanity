@@ -14,6 +14,14 @@ import {
 } from "../lib/detector";
 import { CueIndex } from "../lib/cueIndex";
 import {
+  DriftCorrector,
+  DRIFT_LIMITS,
+  findBestCueMatch,
+  type DriftAnchor,
+  type DriftFitResult,
+  type DriftModel,
+} from "../lib/drift";
+import {
   selectBestTrack,
   formatTrackLabel,
   createTrackFromUser,
@@ -32,6 +40,9 @@ import type { Cue, Settings, SubtitleTrack } from "../types";
 
 // State
 let cues: Cue[] = [];
+// Untranslated cues in the subtitle's native timeline (pre-drift-correction).
+// The active cue list may be timestamp-translated when a drift model is applied.
+let baseCues: Cue[] = [];
 let detector: ProfanityDetector;
 let settings: Settings;
 let cueIndex: CueIndex;
@@ -58,6 +69,19 @@ let currentProfanityWindow: ProfanityWindow | null = null; // Track current prof
 let playbackRate: number = 1.0; // Track playback speed
 let isMuted: boolean = false; // Track mute state to avoid redundant messages
 let originalVolume: number | null = null; // Store original volume before muting (for mobile fallback)
+
+// Drift correction state (per-movie affine model video time → subtitle time)
+let driftCorrector = new DriftCorrector();
+let driftMovieKey: string | null = null; // Storage key for the current movie/track
+let driftEnabled = true; // Whether to apply the fitted model (user can toggle)
+
+// Automatic drift detection: observe the site's own native subtitle track and
+// pair its active cue (video time) with our matching cue (subtitle time).
+let autoDriftEnabled = true; // User setting (Options page)
+let adoptedNativeTrack: TextTrack | null = null; // The track we listen to
+let autoDriftLastAttemptMs = 0; // Rate limiting (DRIFT_LIMITS.autoCaptureIntervalMs)
+let autoDriftLastVideoMs = 0; // Dedup: skip samples at ~same video position
+let autoDriftCleanup: (() => void) | null = null; // Teardown for current track listener
 
 // When true, a user-uploaded subtitle file is active and auto-detection should be suppressed
 let userUploadActive = false;
@@ -159,6 +183,7 @@ async function init(): Promise<void> {
 
   // Load settings
   settings = await storage.getSettings();
+  autoDriftEnabled = settings.autoDriftCorrection !== false;
   log("Settings loaded:", {
     offsetMs: settings.offsetMs,
     sensitivity: settings.sensitivity,
@@ -774,6 +799,7 @@ function hideNativeSubtitlesForSite(source: string): void {
         for (let i = 0; i < tracks.length; i++) {
           const track = tracks[i];
           if (track.kind === 'subtitles' || track.kind === 'captions') {
+            if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
             if (track.mode !== 'disabled') {
               log(`Disabling track: ${track.label || track.language}, mode was: ${track.mode}`);
               track.mode = 'disabled';
@@ -793,6 +819,7 @@ function hideNativeSubtitlesForSite(source: string): void {
           for (let i = 0; i < tracks.length; i++) {
             const track = tracks[i];
             if (track.kind === 'subtitles' || track.kind === 'captions') {
+              if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
               if (track.mode !== 'disabled') {
                 log(`Disabling videojs.players track: ${track.label || track.language}`);
                 track.mode = 'disabled';
@@ -814,6 +841,7 @@ function hideNativeSubtitlesForSite(source: string): void {
         for (let i = 0; i < video.textTracks.length; i++) {
           const track = video.textTracks[i];
           if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+            if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
             log(`Disabling native <track> element: ${track.label || track.language}`);
             track.mode = 'disabled';
           }
@@ -954,6 +982,7 @@ function hideNativeSubtitlesForSite(source: string): void {
         for (let i = 0; i < tracks.length; i++) {
           const track = tracks[i];
           if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+            if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
             log(`Delayed disable of track: ${track.label || track.language}`);
             track.mode = 'disabled';
           }
@@ -981,6 +1010,7 @@ function hideNativeSubtitlesForSite(source: string): void {
             for (let i = 0; i < video.textTracks.length; i++) {
               const track = video.textTracks[i];
               if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
+                if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
                 track.mode = 'disabled';
               }
             }
@@ -1722,6 +1752,11 @@ function attachVideoListeners(video: HTMLVideoElement): void {
     // Don't stop monitoring on pause, just let the loop continue
     // This ensures we're ready when playback resumes
   });
+
+  // Native tracks are often added after the video element appears — try to
+  // adopt one now and again shortly after (track list is stable by then).
+  setupAutoDriftWatch();
+  setTimeout(() => setupAutoDriftWatch(), 5000);
 }
 
 /**
@@ -1859,6 +1894,407 @@ function getCurrentTimeMs(): { timeMs: number; source: string } {
   }
 
   return { timeMs: 0, source: 'none' };
+}
+
+/**
+ * Compute a stable storage key for per-movie drift corrections.
+ * Prefers the subtitle track URL (identifies the exact sub file); falls back
+ * to page URL + cue count so different movies on the same site don't collide.
+ */
+function computeDriftMovieKey(): string {
+  if (currentTrack?.url) {
+    return `track:${currentTrack.url}`;
+  }
+  try {
+    const pageUrl = new URL(window.location.href);
+    pageUrl.hash = "";
+    const cueCount = cues.length;
+    return `page:${pageUrl.origin}${pageUrl.pathname}|${cueCount}`;
+  } catch {
+    return `page:${window.location.href}|${cues.length}`;
+  }
+}
+
+/**
+ * Load any persisted drift model for the current movie and apply it.
+ * Called when cues load or the track changes.
+ * When auto-detection is disabled, auto-captured anchors from a previous
+ * session must NOT resurrect — only deliberate user captures load.
+ */
+async function loadDriftModelForCurrentTrack(): Promise<void> {
+  const key = computeDriftMovieKey();
+  driftMovieKey = key;
+  try {
+    const record = await storage.getDriftRecord(key);
+    const anchors = record && Array.isArray(record.anchors) ? record.anchors : [];
+    const loadable = autoDriftEnabled
+      ? anchors
+      : anchors.filter((a) => a.source !== "auto");
+    if (loadable.length > 0) {
+      driftCorrector = DriftCorrector.fromJSON({
+        anchors: loadable,
+        model: autoDriftEnabled ? record?.model ?? null : null,
+      });
+      // Refit from persisted anchors so the model matches current anchors exactly
+      driftCorrector.refit();
+      log(
+        `Drift correction loaded: key=${key.slice(0, 60)}, anchors=${loadable.length}` +
+        `${autoDriftEnabled ? "" : " (auto disabled — user anchors only)"}, ` +
+        `model=${driftCorrector.current ? `rate=${driftCorrector.current.rate.toFixed(4)} offset=${Math.round(driftCorrector.current.offsetMs)}ms` : "none"}`,
+      );
+    } else {
+      driftCorrector = new DriftCorrector();
+      log(
+        `Drift correction: no saved model for ${key.slice(0, 60)}` +
+        `${autoDriftEnabled ? "" : " (auto disabled)"}`,
+      );
+    }
+  } catch (err) {
+    warn("Failed to load drift record:", err);
+    driftCorrector = new DriftCorrector();
+  }
+}
+
+/**
+ * Persist the current corrector state for the current movie key.
+ */
+async function saveDriftRecord(): Promise<void> {
+  if (!driftMovieKey) return;
+  const snap = driftCorrector.toJSON();
+  try {
+    await storage.setDriftRecord(driftMovieKey, snap);
+  } catch (err) {
+    warn("Failed to save drift record:", err);
+  }
+}
+
+/**
+ * Apply (or clear) the drift model to the cue index.
+ * The model maps video time → subtitle time; the index expects subtitle time
+ * when queried with a video time, so we translate all cue timestamps into
+ * video-time space: video = (sub - offset) / rate.
+ */
+function applyDriftModelToIndex(): void {
+  const model = driftEnabled ? driftCorrector.current : null;
+
+  if (!model || (model.rate === 1 && model.offsetMs === 0)) {
+    // No-op model: restore original timestamps
+    if (baseCues.length > 0 && cues !== baseCues) {
+      cues = baseCues;
+      cueIndex.build(cues);
+      log("Drift correction cleared: restored original cue timings");
+    }
+    return;
+  }
+
+  // Keep the unfitted cue list so we can re-apply when the model changes
+  const baseById = new Map(baseCues.map((c) => [c.id, c]));
+  const translated = baseCues.map((cue) => {
+    const startVideoMs = model.rate === 1
+      ? cue.startMs - model.offsetMs
+      : (cue.startMs - model.offsetMs) / model.rate;
+    const endVideoMs = model.rate === 1
+      ? cue.endMs - model.offsetMs
+      : (cue.endMs - model.offsetMs) / model.rate;
+    return {
+      ...cue,
+      startMs: Math.round(startVideoMs),
+      endMs: Math.round(endVideoMs),
+    };
+  });
+  // Profanity windows are in subtitle-time too — translate and re-attach
+  for (const c of translated) {
+    const src = baseById.get(c.id);
+    if (src?.profanityWindows?.length) {
+      c.profanityWindows = src.profanityWindows.map((w) => {
+        const startVideoMs = model.rate === 1
+          ? w.startMs - model.offsetMs
+          : (w.startMs - model.offsetMs) / model.rate;
+        const endVideoMs = model.rate === 1
+          ? w.endMs - model.offsetMs
+          : (w.endMs - model.offsetMs) / model.rate;
+        const wordStartVideoMs = model.rate === 1
+          ? w.wordStartMs - model.offsetMs
+          : (w.wordStartMs - model.offsetMs) / model.rate;
+        const wordEndVideoMs = model.rate === 1
+          ? w.wordEndMs - model.offsetMs
+          : (w.wordEndMs - model.offsetMs) / model.rate;
+        return {
+          ...w,
+          startMs: Math.round(startVideoMs),
+          endMs: Math.round(endVideoMs),
+          wordStartMs: Math.round(wordStartVideoMs),
+          wordEndMs: Math.round(wordEndVideoMs),
+        };
+      });
+    }
+  }
+
+  cues = translated;
+  cueIndex.build(cues);
+  log(
+    `Drift correction applied: rate=${model.rate.toFixed(4)}, offset=${Math.round(model.offsetMs)}ms ` +
+    `(${model.anchorCount} anchors, rms=${Math.round(model.fitRmsMs)}ms) over ${translated.length} cues`,
+  );
+}
+
+/**
+ * Capture a drift anchor: the user says "this line is being spoken NOW".
+ * videoMs = current video position; subMs = the cue the overlay currently
+ * shows (its subtitle-timeline start).
+ * Returns a human-readable result message for the UI.
+ */
+async function captureDriftAnchor(): Promise<string> {
+  if (!videoElement) return "No video";
+  if (cues.length === 0 || baseCues.length === 0) return "No subtitles loaded";
+
+  const videoMs = Math.round(videoElement.currentTime * 1000);
+  // The cue the overlay is currently showing (or about to show) in sub-time
+  const subMs = currentCueStartForAnchor();
+  if (subMs === null) return "No active cue to anchor";
+
+  driftMovieKey = driftMovieKey || computeDriftMovieKey();
+  const result = driftCorrector.addAnchor(videoMs, subMs);
+
+  // Persist anchors + model for this movie
+  await saveDriftRecord();
+
+  // Absorb the manual offset trim into the new model: the slider value the
+  // user dialed to *see* the misalignment was part of what made the anchor
+  // pairing true, so it belongs in the model now (slider → 0). Both anchor
+  // sources store raw subtitle-timeline subMs, so the model is trim-free and
+  // absorption is exact — no double-correction.
+  if (settings.offsetMs !== 0 && result.model) {
+    settings.offsetMs = 0;
+    storage.setSetting("offsetMs", 0);
+    showNotification("info", "Offset slider absorbed into sync correction (reset to 0)", false);
+  }
+
+  // Apply the (possibly new) model immediately
+  applyDriftModelToIndex();
+
+  if (result.notes.includes("duplicate-anchor")) {
+    return "Anchor already captured at this position";
+  }
+  if (result.notes.includes("outlier-gated")) {
+    return "Anchor rejected as inconsistent — try another line";
+  }
+  if (!result.model) {
+    return "Anchor saved but no stable model yet — add another";
+  }
+
+  const offsetSec = result.model.offsetMs / 1000;
+  const rateStr = result.model.rate === 1 ? "" : ` rate ×${result.model.rate.toFixed(4)}`;
+  const quality = result.model.fitRmsMs <= DRIFT_LIMITS.goodFitRmsMs ? "" : " (rough)";
+  return `Sync corrected: ${offsetSec >= 0 ? "+" : ""}${offsetSec.toFixed(1)}s${rateStr}${quality}`;
+}
+
+/**
+ * Current cue start in *subtitle timeline* ms (pre-drift, pre-offset).
+ * Searches the untranslated cue list by current model mapping.
+ */
+function currentCueStartForAnchor(): number | null {
+  if (!videoElement || baseCues.length === 0) return null;
+  const videoMs = videoElement.currentTime * 1000;
+  // The overlay displays cue = findActive(v, settings.offsetMs) over the
+  // translated index. Undo both transforms to find that cue's original
+  // subtitle-timeline start: add the manual offset trim to video time first,
+  // then invert the model.
+  const subMs = driftCorrector.toSub(videoMs + settings.offsetMs);
+  // Search the untranslated list directly — cueIndex may hold translated times
+  let lo = 0;
+  let hi = baseCues.length - 1;
+  let best: Cue | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const c = baseCues[mid];
+    if (!c) break;
+    if (c.startMs <= subMs) {
+      best = c;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (best && best.endMs >= subMs) return best.startMs;
+  const next = baseCues[lo];
+  return next ? next.startMs : null;
+}
+
+/**
+ * Reset drift correction for the current movie.
+ */
+async function resetDriftCorrection(): Promise<void> {
+  driftCorrector.reset();
+  if (driftMovieKey) {
+    await storage.removeDriftRecord(driftMovieKey);
+  }
+  applyDriftModelToIndex();
+  log("Drift correction reset");
+}
+
+/**
+ * Compact drift status for popup/overlay display
+ */
+function getDriftStatus(): {
+  hasModel: boolean;
+  rate: number;
+  offsetMs: number;
+  anchorCount: number;
+  fitRmsMs: number;
+  enabled: boolean;
+  autoEnabled: boolean;
+  autoWatching: boolean;
+} {
+  const model = driftCorrector.current;
+  return {
+    hasModel: model !== null,
+    rate: model?.rate ?? 1,
+    offsetMs: model?.offsetMs ?? 0,
+    anchorCount: model?.anchorCount ?? 0,
+    fitRmsMs: model?.fitRmsMs ?? 0,
+    enabled: driftEnabled,
+    autoEnabled: autoDriftEnabled,
+    autoWatching: adoptedNativeTrack !== null,
+  };
+}
+
+// ==================== Automatic drift detection ====================
+
+/**
+ * Choose which native TextTrack to observe for automatic drift samples.
+ * Prefers the currently showing track (the one the user sees on the site),
+ * then showing > hidden > disabled kinds subtitles/captions. Returns null
+ * when the site's own subtitles aren't present.
+ */
+function pickNativeTrack(video: HTMLVideoElement): TextTrack | null {
+  let showing: TextTrack | null = null;
+  let hidden: TextTrack | null = null;
+  let disabled: TextTrack | null = null;
+  for (let i = 0; i < video.textTracks.length; i++) {
+    const t = video.textTracks[i];
+    if (!t || (t.kind !== "subtitles" && t.kind !== "captions")) continue;
+    if (adoptedNativeTrack && t === adoptedNativeTrack) return adoptedNativeTrack;
+    if (t.mode === "showing" && !showing) showing = t;
+    else if (t.mode === "hidden" && !hidden) hidden = t;
+    else if (t.mode === "disabled" && !disabled) disabled = t;
+  }
+  return showing || hidden || disabled;
+}
+
+/** True when this track is the one auto-drift observes — exempt from suppression */
+function isAdoptedNativeTrack(track: TextTrack): boolean {
+  return adoptedNativeTrack !== null && track === adoptedNativeTrack;
+}
+
+/**
+ * Watch the site's native subtitle track and capture drift anchors
+ * automatically: when the native track shows a line, find our cue with the
+ * same text and anchor (videoMs, our cue's subtitle-timeline startMs).
+ *
+ * The native track's own cue-change events provide exact video-side timing —
+ * no guessing from currentTime alone. Matching requires ≥0.8 token similarity
+ * and a unique best candidate (see findBestCueMatch), so repeated lines and
+ * near-duplicates don't poison the model.
+ */
+function setupAutoDriftWatch(): void {
+  teardownAutoDriftWatch();
+
+  if (!autoDriftEnabled || !videoElement) return;
+  if (userUploadActive) {
+    log("Auto drift: suppressed while user upload is active");
+    return;
+  }
+
+  const video = videoElement;
+  const track = pickNativeTrack(video);
+  if (!track) {
+    debug("Auto drift: no native subtitle track to observe");
+    return;
+  }
+
+  // cuechange only fires when the track is loaded; 'hidden' renders nothing
+  // while keeping events alive, so bootstrap disabled tracks into hidden.
+  // The site's own scripts may still force this track to showing — the site
+  // subtitle and our censored overlay can then both render; that is the
+  // site's doing, and the observed timing is identical either way.
+  if (track.mode === "disabled") {
+    track.mode = "hidden";
+  }
+
+  const nativeActiveCue = (): VTTCue | null => {
+    const cueList = track.activeCues;
+    if (!cueList || cueList.length === 0) return null;
+    const first = cueList[0] as VTTCue | undefined;
+    return first ?? null;
+  };
+
+  const onCueChange = (): void => {
+    if (!autoDriftEnabled || userUploadActive || cues.length === 0 || baseCues.length === 0) return;
+    if (!videoElement || videoElement.paused) return;
+    if (!driftEnabled) return;
+
+    const nativeCue = nativeActiveCue();
+    if (!nativeCue || !nativeCue.text || nativeCue.text.trim().length < 8) return;
+
+    const videoMs = Math.round(video.currentTime * 1000);
+    // Dedup: same native cue re-firing or a seek landing back in it
+    if (Math.abs(videoMs - autoDriftLastVideoMs) < 1000) return;
+
+    // Search candidates around the model-mapped position (±60s). With a bad
+    // or missing model the mapped position ≈ video position, which is where
+    // the site's track (usually a correct-timebase copy of the same subs)
+    // already lines up — so first-contact self-syncs, and a stale model gets
+    // corrected rather than compounding.
+    const mappedMs = driftCorrector.toSub(videoMs);
+    const SEARCH_MS = 60000;
+    const candidates = baseCues.filter(
+      (c) => c.startMs >= mappedMs - SEARCH_MS && c.startMs <= mappedMs + SEARCH_MS,
+    );
+    const match = findBestCueMatch(candidates, nativeCue.text);
+    if (!match) return;
+
+    autoDriftLastVideoMs = videoMs;
+    if (!driftCorrector.canCaptureAuto(Date.now(), autoDriftLastAttemptMs)) return;
+    autoDriftLastAttemptMs = Date.now();
+
+    const result = driftCorrector.addAnchor(
+      videoMs,
+      match.cue.startMs,
+      Date.now(),
+      "auto",
+    );
+    if (result.rejected > 0) {
+      debug(`Auto drift: sample rejected (${result.notes.join(",")})`);
+      return;
+    }
+    debug(
+      `Auto drift: anchor at video=${(videoMs / 1000).toFixed(1)}s ` +
+      `sim=${match.similarity.toFixed(2)} notes=${result.notes.join(",") || "ok"}`,
+    );
+
+    applyDriftModelToIndex();
+    saveDriftRecord();
+  };
+
+  track.addEventListener("cuechange", onCueChange);
+  adoptedNativeTrack = track;
+  debug(
+    `Auto drift: observing native track "${track.label || track.language || track.kind}"`,
+  );
+
+  autoDriftCleanup = () => {
+    track.removeEventListener("cuechange", onCueChange);
+  };
+}
+
+/** Tear down the current native-track listener */
+function teardownAutoDriftWatch(): void {
+  if (autoDriftCleanup) {
+    autoDriftCleanup();
+    autoDriftCleanup = null;
+  }
+  adoptedNativeTrack = null;
 }
 
 /**
@@ -2250,6 +2686,7 @@ function createUploadOverlay(): void {
         // which has the video element
         userUploadActive = true;
         log("User upload active: suppressing auto-detection until unload");
+        teardownAutoDriftWatch();
         stopMonitoring();
         await handleSubtitleUpload(content, file.name);
         log(`Upload overlay: upload complete, ${cues.length} cues loaded`);
@@ -2463,6 +2900,42 @@ function handleStorageChange(
         stopMonitoring();
       }
     }
+
+    // Handle auto drift correction toggle — mode switches are immediate,
+    // no page refresh needed.
+    if (oldSettings.autoDriftCorrection !== settings.autoDriftCorrection) {
+      autoDriftEnabled = settings.autoDriftCorrection !== false;
+      if (autoDriftEnabled) {
+        autoDriftLastVideoMs = 0;
+        autoDriftLastAttemptMs = 0;
+        setupAutoDriftWatch();
+        showNotification("info", "Auto sync on — corrections apply automatically", false);
+      } else {
+        teardownAutoDriftWatch();
+        // Drop auto-captured anchors and any model they fitted; user
+        // anchors (deliberate Alt+S captures) survive and refit if present.
+        // Without this the auto model would keep applying on top of the
+        // user's manual offset — double correction.
+        const hadAutoModel = driftCorrector.current !== null;
+        driftCorrector.resetAuto();
+        driftCorrector.refit();
+        applyDriftModelToIndex();
+        cueIndex.build(cues);
+        const model = driftCorrector.current;
+        const detail = model
+          ? "manual anchors kept"
+          : hadAutoModel
+            ? "auto correction removed"
+            : "";
+        showNotification(
+          "info",
+          detail
+            ? `Auto sync off — ${detail}. Use the offset slider or Alt+S`
+            : "Auto sync off — use the offset slider or Alt+S",
+          false,
+        );
+      }
+    }
   }
 }
 
@@ -2496,6 +2969,9 @@ async function handleMessage(message: unknown): Promise<unknown> {
       log(`uploadCues: processing user upload "${uploadFilename}" (${uploadContent?.length || 0} bytes)`);
       userUploadActive = true;
       log(`User upload active: suppressing auto-detection until unload`);
+      // User's own subs are the display now — the adopted native track's
+      // suppression exemption would leak site subtitles, so drop the watch
+      teardownAutoDriftWatch();
       // Stop current monitoring before processing user upload
       stopMonitoring();
       // Process the upload — this will parse, run profanity detection, and start monitoring.
@@ -2518,6 +2994,7 @@ async function handleMessage(message: unknown): Promise<unknown> {
         userUploadActive = false;
         currentTrack = null;
         cues = [];
+        baseCues = [];
         detectedTracks = detectedTracks.filter(t => t.source !== 'user' && !t.id.startsWith('user-upload-'));
         log("unloadCues: cleared upload state in non-video frame");
       }
@@ -2620,6 +3097,59 @@ async function handleMessage(message: unknown): Promise<unknown> {
         tracks: detectedTracks,
         currentTrack,
         userUploadActive,
+      });
+
+    case "captureDriftAnchor": {
+      // Popup/overlay: "this subtitle line is being spoken right now"
+      captureDriftAnchor().then((message) => {
+        // Show the result as an overlay notification
+        showNotification("info", message, false);
+        // Report back so the popup can display it too
+        browser.runtime.sendMessage({
+          type: "frameStatus",
+          hasVideo: !!videoElement,
+          active: isActive,
+          cueCount: cues.length,
+          profanityCount: cueIndex.getProfanityCueCount(),
+          currentTrack,
+          detectedTracks,
+          userUploadActive,
+          driftStatus: getDriftStatus(),
+        }).catch(() => {});
+      });
+      break;
+    }
+
+    case "resetDrift":
+      resetDriftCorrection().then(() => {
+        showNotification("info", "Sync correction reset", false);
+      });
+      break;
+
+    case "toggleDrift": {
+      driftEnabled = msg.enabled !== false;
+      if (!driftEnabled) {
+        // Stop collecting samples when correction is off entirely
+        teardownAutoDriftWatch();
+      } else {
+        setupAutoDriftWatch();
+        autoDriftLastVideoMs = 0;
+        autoDriftLastAttemptMs = 0;
+      }
+      applyDriftModelToIndex();
+      cueIndex.build(cues);
+      showNotification(
+        "info",
+        driftEnabled ? "Sync correction enabled" : "Sync correction disabled — offset slider still applies",
+        false,
+      );
+      break;
+    }
+
+    case "getDriftStatus":
+      return Promise.resolve({
+        type: "driftStatus",
+        ...getDriftStatus(),
       });
   }
 
@@ -2725,10 +3255,18 @@ async function handleSubtitleUnload(): Promise<void> {
 
   // Clear all cues
   cues = [];
+  baseCues = [];
   cueIndex.build(cues);
 
   // Reset current track
   currentTrack = null;
+  // Drift model is per-movie — drop it along with the movie's subtitles
+  driftCorrector = new DriftCorrector();
+  driftMovieKey = null;
+  // Stop observing the (now stale) native track; the next cue load re-adopts
+  teardownAutoDriftWatch();
+  autoDriftLastVideoMs = 0;
+  autoDriftLastAttemptMs = 0;
 
   // Remove user-uploaded tracks from detected tracks list
   detectedTracks = detectedTracks.filter(t => t.source !== 'user' && !t.id.startsWith('user-upload-'));
@@ -2831,6 +3369,7 @@ async function restoreUserUpload(): Promise<void> {
     });
 
     cues = restoredCues;
+    baseCues = restoredCues;
     cueIndex.build(cues);
 
     // Restore track metadata
@@ -2844,6 +3383,7 @@ async function restoreUserUpload(): Promise<void> {
     // Re-enable user upload suppression
     userUploadActive = true;
     log(`User upload restored: suppressing auto-detection`);
+    teardownAutoDriftWatch();
   } catch (err) {
     warn("Failed to restore user upload state:", err);
   }
@@ -2910,6 +3450,45 @@ function reprocessCuesWithNewDetector(): void {
 }
 
 /**
+ * True when the cue source represents an explicit user/track selection that
+ * fully replaces existing cues.
+ */
+function isUserSelectionSource(source: string): boolean {
+  return source === 'lookmovie.user-subtitle-selected' ||
+         source === 'lookmovie.auto-selected' ||
+         source === 'user-selection' ||
+         source === 'user-upload' ||
+         source.includes('user-subtitle');
+}
+
+/**
+ * Heuristic: do the incoming cues look like a replacement of the existing set
+ * (rather than incremental HLS segments)? Overlapping time ranges with
+ * substantially different content is the giveaway.
+ */
+function replacementLikely(existing: Cue[], incoming: Cue[]): boolean {
+  if (existing.length === 0 || incoming.length === 0) return false;
+  const existingStart = existing[0]?.startMs ?? 0;
+  const existingEnd = existing[existing.length - 1]?.endMs ?? 0;
+  const newStart = incoming[0]?.startMs ?? 0;
+  const newEnd = incoming[incoming.length - 1]?.endMs ?? 0;
+
+  const overlapStart = Math.max(existingStart, newStart);
+  const overlapEnd = Math.min(existingEnd, newEnd);
+  const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+  const existingDuration = existingEnd - existingStart;
+
+  // Same time range but different text = a re-parsed/re-detected set
+  if (existingDuration > 0 && overlapDuration > existingDuration * 0.5) {
+    const existingKeys = new Set(existing.map((c) => `${c.startMs}:${c.text}`));
+    const sameText = incoming.filter((c) => existingKeys.has(`${c.startMs}:${c.text}`)).length;
+    // If >30% of incoming cues already exist verbatim, treat as incremental
+    return sameText < incoming.length * 0.3;
+  }
+  return false;
+}
+
+/**
  * Process cues with profanity detection
  * For HLS streams, accumulate cues from multiple segments instead of replacing
  */
@@ -2964,6 +3543,21 @@ function processCues(newCues: Cue[]): void {
 
     return processedCue;
   });
+
+  // Track the untranslated cue list for drift correction. When the incoming
+  // cues fully replace existing ones (track switch / upload), reset baseCues
+  // and the per-movie drift state; otherwise accumulate into it.
+  const isReplacementSource = isUserSelectionSource(firstCueSource);
+  if (isReplacementSource || baseCues.length === 0 || replacementLikely(baseCues, processedNewCues)) {
+    baseCues = processedNewCues;
+  } else {
+    const existingKeys = new Set(baseCues.map((c) => `${c.startMs}:${c.text}`));
+    const uniqueNew = processedNewCues.filter((c) => !existingKeys.has(`${c.startMs}:${c.text}`));
+    baseCues = [...baseCues, ...uniqueNew];
+    if (baseCues.length > 1) {
+      baseCues.sort((a, b) => a.startMs - b.startMs);
+    }
+  }
 
   // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
   // If new cues have similar timing range to existing, replace instead of accumulate
@@ -3076,8 +3670,36 @@ function processCues(newCues: Cue[]): void {
   // for VOD content to cover the entire video.
   // Memory usage is acceptable: 2000 cues ≈ 2MB.
 
+  // Drift correction: reload/refresh the per-movie model when the cue set
+  // changed identity (track switch or first load), then re-apply translation.
+  // For incremental updates (HLS segments), keep the current model.
+  // If the user already captured anchors in this session, keep them and just
+  // migrate to the new key — a reload here would discard their work.
+  const newMovieKey = computeDriftMovieKey();
+  if (newMovieKey !== driftMovieKey) {
+    const hasCapturedAnchors = driftCorrector.getAnchors().length > 0;
+    driftMovieKey = newMovieKey;
+    if (hasCapturedAnchors) {
+      // Migrate captured anchors to the new key so future sessions find them
+      saveDriftRecord();
+    } else {
+      loadDriftModelForCurrentTrack().then(() => {
+        applyDriftModelToIndex();
+        cueIndex.build(cues);
+        log(`Processed ${cues.length} cues after drift reload`);
+      }).catch((err) => warn("Drift model reload failed:", err));
+    }
+  } else {
+    // Same movie: re-apply existing model over the updated base cue set
+    applyDriftModelToIndex();
+  }
+
   // Build index for fast lookup
   cueIndex.build(cues);
+
+  // Native track may have appeared while cues were loading (or a user upload
+  // just ended) — (re)try adopting it for automatic drift samples.
+  setupAutoDriftWatch();
 
   // Log summary
   const profanityCueCount = cueIndex.getProfanityCueCount();
@@ -3579,5 +4201,11 @@ document.addEventListener("keydown", (event) => {
   } else if (event.altKey && event.key === "ArrowRight") {
     settings.offsetMs += 500;
     storage.setSetting("offsetMs", settings.offsetMs);
+  } else if (event.altKey && (event.key === "s" || event.key === "S")) {
+    // Alt+S: capture a sync anchor ("this line is being spoken right now")
+    event.preventDefault();
+    captureDriftAnchor().then((message) => {
+      showNotification("info", message, false);
+    });
   }
 });

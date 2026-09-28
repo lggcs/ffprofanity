@@ -67,7 +67,8 @@ export class CueIndex {
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
       const node = this.sortedByStart[mid];
-      
+      if (!node) break;
+
       if (node.start <= adjustedTime) {
         // Check if this cue is active
         if (node.end >= adjustedTime) {
@@ -79,7 +80,7 @@ export class CueIndex {
         high = mid - 1;
       }
     }
-    
+
     return null;
   }
   
@@ -162,6 +163,42 @@ export class CueIndex {
     this.profanityCues = [];
     this.profanityWindows = [];
     this.cueById.clear();
+  }
+
+  /**
+   * Find the cue that will be displayed at a given *subtitle timeline* time
+   * (no offset applied) — i.e. the cue whose range contains subMs, or the
+   * next one to start. This is the anchor-pick for drift correction: the user
+   * sees the current overlay line and confirms it matches the audio.
+   */
+  findCueForAnchor(subMs: number): Cue | null {
+    if (this.sortedByStart.length === 0) return null;
+
+    // Binary search for the last cue with start <= subMs
+    let low = 0;
+    let high = this.sortedByStart.length - 1;
+    let candidate: CueNode | undefined;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const node = this.sortedByStart[mid];
+      if (!node) break;
+      if (node.start <= subMs) {
+        candidate = node;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (candidate && candidate.end >= subMs) return candidate.cue;
+
+    // Between cues (or before the first): the next cue to appear is what the
+    // user will next see/compare — prefer it as the anchor reference.
+    const next = this.sortedByStart[low];
+    if (next) return next.cue;
+
+    return candidate ? candidate.cue : null;
   }
 
   /**

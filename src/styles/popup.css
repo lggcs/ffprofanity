@@ -303,6 +303,44 @@ body {
   border-top: 1px solid var(--border-color);
 }
 
+/* Drift / Sync Correction section */
+.drift-section {
+  padding: 8px 16px 10px;
+  background: var(--card-bg);
+  border-top: 1px solid var(--border-color);
+}
+
+.drift-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+  margin-bottom: 2px;
+}
+
+.drift-status {
+  font-size: 12px;
+  color: var(--text-color);
+  margin-bottom: 6px;
+}
+
+.drift-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.drift-buttons button {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.drift-result {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--success-color);
+}
+
 button {
   flex: 1;
   padding: 10px 16px;

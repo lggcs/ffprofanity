@@ -39,12 +39,16 @@ async function init(): Promise<void> {
 
   // Load current status
   await loadStatus();
-  
+
   // Load settings for the settings view
   await loadSettings();
 
   // Setup event handlers
   setupEventHandlers();
+
+  // Show current drift-correction state (content script may not respond —
+  // e.g. popup opened on a non-video tab — in which case defaults remain)
+  refreshDriftStatus();
 }
 
 function setupEventHandlers(): void {
@@ -61,6 +65,12 @@ function setupEventHandlers(): void {
   changeTrackBtn.addEventListener("click", handleChangeOrUpload);
   unloadBtn.addEventListener("click", handleUnload);
   uploadBtn.addEventListener("click", handleUploadClick);
+
+  // Drift / sync correction controls
+  const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement | null;
+  const resetSyncBtn = document.getElementById("resetSyncBtn") as HTMLButtonElement | null;
+  syncNowBtn?.addEventListener("click", handleSyncNow);
+  resetSyncBtn?.addEventListener("click", handleResetSync);
   
   // Full options link opens in new tab
   openFullOptions.addEventListener("click", (e) => {
@@ -578,6 +588,116 @@ async function handleUploadClick(): Promise<void> {
   } catch (err) {
     error("Failed to show upload overlay:", err);
   }
+}
+
+/** Drift status shape reported by the content script */
+interface DriftStatus {
+  hasModel: boolean;
+  rate: number;
+  offsetMs: number;
+  anchorCount: number;
+  fitRmsMs: number;
+  enabled: boolean;
+  autoEnabled?: boolean;
+  autoWatching?: boolean;
+}
+
+/**
+ * Get the video tab id for the active window (null when none).
+ */
+async function getActiveTabId(): Promise<number | null> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab.id ?? null;
+}
+
+/**
+ * "Sync now": tell the video frame that the currently displayed subtitle
+ * line is being spoken right now. The content script captures the anchor,
+ * refits the model, applies it and shows an on-page notification.
+ */
+async function handleSyncNow(): Promise<void> {
+  const tabId = await getActiveTabId();
+  if (!tabId) return;
+  try {
+    await browser.tabs.sendMessage(tabId, { type: "captureDriftAnchor" });
+    // Give the content script a moment to apply the model, then refresh status
+    setTimeout(refreshDriftStatus, 400);
+  } catch (err) {
+    error("Failed to send captureDriftAnchor:", err);
+    showDriftResult("No video page with subtitles in this tab");
+  }
+}
+
+/**
+ * Reset drift correction for the current movie.
+ */
+async function handleResetSync(): Promise<void> {
+  const tabId = await getActiveTabId();
+  if (!tabId) return;
+  try {
+    await browser.tabs.sendMessage(tabId, { type: "resetDrift" });
+    setTimeout(refreshDriftStatus, 300);
+  } catch (err) {
+    error("Failed to send resetDrift:", err);
+  }
+}
+
+/**
+ * Query the content script for current drift status and render it.
+ */
+async function refreshDriftStatus(): Promise<void> {
+  const tabId = await getActiveTabId();
+  if (!tabId) return;
+  try {
+    const response = (await browser.tabs.sendMessage(tabId, {
+      type: "getDriftStatus",
+    })) as DriftStatus | undefined;
+    if (response) {
+      renderDriftStatus(response);
+    }
+  } catch {
+    // Content script not in this tab — leave the default text
+  }
+}
+
+/**
+ * Render the drift status line in the popup.
+ */
+function renderDriftStatus(status: DriftStatus): void {
+  const statusEl = document.getElementById("driftStatus");
+  if (!statusEl) return;
+
+  if (!status.enabled) {
+    statusEl.textContent = status.hasModel ? "Correction paused" : "No correction";
+    return;
+  }
+
+  if (!status.hasModel) {
+    statusEl.textContent = status.autoEnabled
+      ? status.autoWatching
+        ? "Auto-sync watching"
+        : "Auto-sync armed"
+      : "Manual mode — offset slider only";
+    return;
+  }
+
+  const offsetSec = status.offsetMs / 1000;
+  const offsetStr = `${offsetSec >= 0 ? "+" : ""}${offsetSec.toFixed(1)}s`;
+  const rateStr = status.rate !== 1 ? ` ×${status.rate.toFixed(4)}` : "";
+  const anchors = status.anchorCount > 1 ? ` (${status.anchorCount} anchors)` : "";
+  const autoStr = status.autoEnabled ? " auto" : "";
+  statusEl.textContent = `Applied: ${offsetStr}${rateStr}${anchors}${autoStr}`;
+}
+
+/**
+ * Show a transient result message under the sync buttons.
+ */
+function showDriftResult(message: string): void {
+  const el = document.getElementById("driftResult");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove("hidden");
+  setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
 async function handleUnload(): Promise<void> {

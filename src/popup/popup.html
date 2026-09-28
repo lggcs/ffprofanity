@@ -55,6 +55,17 @@
       <div id="nextList"></div>
     </div>
 
+    <!-- Drift / Sync Correction -->
+    <div class="drift-section" id="driftSection">
+      <div class="drift-label">Audio Sync</div>
+      <div class="drift-status" id="driftStatus">No correction</div>
+      <div class="drift-buttons">
+        <button id="syncNowBtn" class="secondary small" title="Mark that the currently displayed subtitle line is being spoken right now (also Alt+S). Auto-sync usually handles this — use only if a line is still out of sync.">✓ Sync now</button>
+        <button id="resetSyncBtn" class="secondary small">Reset</button>
+      </div>
+      <div class="drift-result hidden" id="driftResult"></div>
+    </div>
+
     <div class="button-group">
       <button id="toggle" class="primary" disabled>Enable</button>
       <button id="options" class="secondary">Settings</button>

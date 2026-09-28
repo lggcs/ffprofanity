@@ -4,9 +4,13 @@
  */
 
 import type { Cue, Settings, StorageSchema, SubtitleTrack } from '../types';
+import type { DriftAnchor, DriftModel } from './drift';
 import { warn } from './logger';
 
 const CURRENT_SCHEMA_VERSION = 1;
+
+/** Max drift-correction records kept in storage (LRU) */
+const DRIFT_MAX_RECORDS = 50;
 
 const DEFAULT_SETTINGS: Settings = {
   enabled: true,  // Extension starts enabled by default
@@ -20,6 +24,7 @@ const DEFAULT_SETTINGS: Settings = {
   preferredLanguage: 'en',
   preferSDH: true,
   autoSelectTrack: true,
+  autoDriftCorrection: true,
   // Substitution settings - default to funny monkey emojis
   useSubstitutions: true,
   substitutionCategory: 'monkeys',
@@ -140,6 +145,80 @@ export class StorageManager {
     const presets = result.presets || {};
     presets[site] = preset;
     await browser.storage.local.set({ presets });
+  }
+
+  // ==================== Drift correction storage ====================
+
+  /**
+   * Load the drift-correction record for a movie key, plus all records for GC.
+   */
+  async getDriftRecord(
+    key: string,
+  ): Promise<{ anchors?: DriftAnchor[]; model?: DriftModel | null; updatedAt?: number } | null> {
+    try {
+      const result = await browser.storage.local.get('driftCorrections');
+      const store = (result.driftCorrections || {}) as Record<
+        string,
+        { anchors?: DriftAnchor[]; model?: DriftModel | null; updatedAt?: number }
+      >;
+      return store[key] ?? null;
+    } catch (err) {
+      warn('getDriftRecord failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Save the drift-correction record for a movie key and prune stale entries.
+   */
+  async setDriftRecord(
+    key: string,
+    record: { anchors: DriftAnchor[]; model: DriftModel | null },
+  ): Promise<void> {
+    try {
+      const result = await browser.storage.local.get('driftCorrections');
+      const raw = (result.driftCorrections || {}) as unknown;
+      // Guard against corrupt/non-object storage shapes — start fresh
+      type DriftStoreEntry = { anchors?: DriftAnchor[]; model?: DriftModel | null; updatedAt?: number };
+      const store: Record<string, DriftStoreEntry> =
+        raw && typeof raw === 'object' && !Array.isArray(raw)
+          ? (raw as Record<string, DriftStoreEntry>)
+          : {};
+      store[key] = { ...record, updatedAt: Date.now() };
+
+      // Prune: keep the 50 most recently updated records
+      const entries = Object.entries(store)
+        .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
+        .slice(0, DRIFT_MAX_RECORDS);
+      await browser.storage.local.set({
+        driftCorrections: Object.fromEntries(entries),
+      });
+    } catch (err) {
+      warn('setDriftRecord failed:', err);
+    }
+  }
+
+  /**
+   * Remove a single drift record.
+   */
+  async removeDriftRecord(key: string): Promise<void> {
+    try {
+      const result = await browser.storage.local.get('driftCorrections');
+      const store = (result.driftCorrections || {}) as Record<string, unknown>;
+      delete store[key];
+      await browser.storage.local.set({ driftCorrections: store });
+    } catch (err) {
+      warn('removeDriftRecord failed:', err);
+    }
+  }
+
+  /**
+   * Remove all drift records.
+   */
+  async clearAllDriftRecords(): Promise<void> {
+    await browser.storage.local.remove('driftCorrections').catch((err) =>
+      warn('clearAllDriftRecords failed:', err),
+    );
   }
 
   /**
