@@ -2056,6 +2056,28 @@ function applyDriftModelToIndex(): void {
  * shows (its subtitle-timeline start).
  * Returns a human-readable result message for the UI.
  */
+/**
+ * Disable auto-sync because the user moved the offset slider manually.
+ * Drops auto anchors/model immediately (user anchors survive and refit);
+ * the slider now stands alone. Persisted so the Options checkbox
+ * reflects the takeover.
+ */
+function takeoverFromAutoDrift(): void {
+  if (!autoDriftEnabled) return;
+  autoDriftEnabled = false;
+  teardownAutoDriftWatch();
+  driftCorrector.resetAuto();
+  driftCorrector.refit();
+  applyDriftModelToIndex();
+  cueIndex.build(cues);
+  storage.setSetting("autoDriftCorrection", false).catch(() => {});
+  showNotification(
+    "info",
+    "Manual offset set — auto sync off. Re-enable in Options for automatic sync.",
+    false,
+  );
+}
+
 async function captureDriftAnchor(): Promise<string> {
   if (!videoElement) return "No video";
   if (cues.length === 0 || baseCues.length === 0) return "No subtitles loaded";
@@ -2913,9 +2935,20 @@ function handleStorageChange(
       }
     }
 
+    // Manual offset move takes over from auto-sync: the user is trimming
+    // by hand, so an auto model applying on top would double-correct.
+    // Drop auto anchors/model immediately; the slider stands alone.
+    if (
+      autoDriftEnabled &&
+      oldSettings.offsetMs !== settings.offsetMs &&
+      settings.offsetMs !== 0
+    ) {
+      takeoverFromAutoDrift();
+    }
+
     // Handle auto drift correction toggle — mode switches are immediate,
     // no page refresh needed.
-    if (oldSettings.autoDriftCorrection !== settings.autoDriftCorrection) {
+    if ((settings.autoDriftCorrection !== false) !== autoDriftEnabled) {
       autoDriftEnabled = settings.autoDriftCorrection !== false;
       if (autoDriftEnabled) {
         autoDriftLastVideoMs = 0;
@@ -3113,23 +3146,11 @@ async function handleMessage(message: unknown): Promise<unknown> {
 
     case "captureDriftAnchor": {
       // Popup/overlay: "this subtitle line is being spoken right now"
-      captureDriftAnchor().then((message) => {
-        // Show the result as an overlay notification
-        showNotification("info", message, false);
-        // Report back so the popup can display it too
-        browser.runtime.sendMessage({
-          type: "frameStatus",
-          hasVideo: !!videoElement,
-          active: isActive,
-          cueCount: cues.length,
-          profanityCount: cueIndex.getProfanityCueCount(),
-          currentTrack,
-          detectedTracks,
-          userUploadActive,
-          driftStatus: getDriftStatus(),
-        }).catch(() => {});
-      });
-      break;
+      const resultMessage = await captureDriftAnchor();
+      // Show the result as an overlay notification
+      showNotification("info", resultMessage, false);
+      // Return the result so the popup can display it too
+      return resultMessage;
     }
 
     case "resetDrift":
@@ -4214,9 +4235,11 @@ document.addEventListener("keydown", (event) => {
   if (event.altKey && event.key === "ArrowLeft") {
     settings.offsetMs -= 500;
     storage.setSetting("offsetMs", settings.offsetMs);
+    takeoverFromAutoDrift();
   } else if (event.altKey && event.key === "ArrowRight") {
     settings.offsetMs += 500;
     storage.setSetting("offsetMs", settings.offsetMs);
+    takeoverFromAutoDrift();
   } else if (event.altKey && (event.key === "s" || event.key === "S")) {
     // Alt+S: capture a sync anchor ("this line is being spoken right now")
     event.preventDefault();

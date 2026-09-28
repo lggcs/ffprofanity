@@ -704,15 +704,20 @@ async function getActiveTabId(): Promise<number | null> {
 /**
  * "Sync now": tell the video frame that the currently displayed subtitle
  * line is being spoken right now. The content script captures the anchor,
- * refits the model, applies it and shows an on-page notification.
+ * refits the model, applies it, and returns a result line we display.
  */
 async function handleSyncNow(): Promise<void> {
   const tabId = await getActiveTabId();
   if (!tabId) return;
   try {
-    await browser.tabs.sendMessage(tabId, { type: "captureDriftAnchor" });
-    // Give the content script a moment to apply the model, then refresh status
-    setTimeout(refreshDriftStatus, 400);
+    const result = (await browser.tabs.sendMessage(tabId, {
+      type: "captureDriftAnchor",
+    })) as string | undefined;
+    if (typeof result === "string" && result.length > 0) {
+      showDriftResult(result);
+    } else {
+      showDriftResult("No active subtitle line to sync against");
+    }
   } catch (err) {
     error("Failed to send captureDriftAnchor:", err);
     showDriftResult("No video page with subtitles in this tab");
