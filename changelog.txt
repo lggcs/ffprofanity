@@ -1,0 +1,29 @@
+ffprofanity 1.4.0 (2026-09-28)
+
+Features
+- Auto drift correction: watches the site's own subtitle track and
+  self-syncs as the movie plays (native-track cuechange pairing,
+  offset + rate model, auto anchors capped/validated; opt-out in
+  Options → Timing Sync)
+- Manual and automatic sync are now mutually exclusive: moving the
+  offset slider (popup, Options, or Alt+←/→) immediately disables
+  auto-sync with an on-page notice; re-enabling auto takes the slider
+  back to 0 on lock-on. No double-correction in either direction.
+- "Sync now" (popup / Alt+S) now reports its result in the popup:
+  correction applied, anchors needed, or anchor rejected.
+- Firefox Android: popup opens as a tab there — tab-aware targeting,
+  saves are verified (failed writes now say "Save failed — try again"),
+  toggle falls back to direct delivery if the background is asleep.
+- Popup's Audio Sync mode line updates live when settings change
+  elsewhere (no reopen needed); fixed settings form init order.
+
+Detection
+- Wordlist additions from a real-movie audit (Quantum Supremacy 2025,
+  1116 cues): shitter/shitters, bloody, frickin/frickin'/fricking,
+  friggin/friggin'/frigging. No obfuscated forms missed.
+
+Code health
+- Fixed all 230 noUncheckedIndexedAccess type errors with real guards;
+  no tsconfig weakening, no `!`/`as any`, no behavior change.
+
+XPI: artifacts/ffprofanity-1.4.0.xpi
