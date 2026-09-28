@@ -37,14 +37,29 @@ async function init(): Promise<void> {
   trackList = document.getElementById("trackList") as HTMLElement;
   trackOptions = document.getElementById("trackOptions") as HTMLElement;
 
+  // Assign module-level elements and wire listeners BEFORE loading
+  // settings — loadSettings() writes into showUpcomingCheckbox and other
+  // module-level elements that setupEventHandlers() assigns.
+  setupEventHandlers();
+
   // Load current status
   await loadStatus();
 
   // Load settings for the settings view
   await loadSettings();
 
-  // Setup event handlers
-  setupEventHandlers();
+  // Keep this popup in step with settings changed elsewhere: the content
+  // script's manual-takeover and auto lock-on absorption rewrite
+  // settings.offsetMs / autoDriftCorrection while the popup is open
+  // (options page, Alt+←/→ on the video page). Re-render form + status.
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.settings) return;
+    // Let the content script finish applying its side of the change first
+    setTimeout(() => {
+      void loadSettings();
+      void refreshDriftStatus();
+    }, 300);
+  });
 
   // Show current drift-correction state (content script may not respond —
   // e.g. popup opened on a non-video tab — in which case defaults remain)
