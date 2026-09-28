@@ -376,10 +376,11 @@ function updatePreview(): void {
   // Parse custom substitutions for preview
   if (category === 'custom' && customText.trim()) {
     const lines = customText.split('\n').filter(l => l.includes('='));
+    const customExamples = examples.custom;
     for (const line of lines) {
       const [word, replacement] = line.split('=').map(s => s.trim());
-      if (word && replacement) {
-        examples.custom.push({ 
+      if (word && replacement && customExamples) {
+        customExamples.push({ 
           original: word, 
           display: sanitize(word), 
           censored: replacement 
@@ -388,7 +389,7 @@ function updatePreview(): void {
     }
   }
 
-  const categoryExamples = examples[category] || examples.silly;
+  const categoryExamples = examples[category] || examples.silly || [];
   if (categoryExamples.length === 0) {
     previewTextEl.textContent = "No custom substitutions defined. Add some above!";
     return;

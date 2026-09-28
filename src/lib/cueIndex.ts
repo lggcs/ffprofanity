@@ -117,7 +117,9 @@ export class CueIndex {
 
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
-      if (this.sortedByStart[mid].start > adjustedTime) {
+      const node = this.sortedByStart[mid];
+      if (!node) break;
+      if (node.start > adjustedTime) {
         startIdx = mid;
         high = mid - 1;
       } else {
@@ -137,6 +139,7 @@ export class CueIndex {
   getTotalDuration(): number {
     if (this.cues.length === 0) return 0;
     const lastCue = this.cues[this.cues.length - 1];
+    if (!lastCue) return 0;
     return lastCue.endMs;
   }
   
@@ -223,6 +226,7 @@ export class CueIndex {
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
       const node = this.profanityCues[mid];
+      if (!node) break;
 
       // Check if we're within the cue (with buffers)
       const cueStartWithBuffer = node.start - MUTE_ADVANCE_MS;
@@ -260,6 +264,7 @@ export class CueIndex {
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
       const window = this.profanityWindows[mid];
+      if (!window) break;
 
       // Check if we're within this window (with advance buffer for early muting)
       const windowStartWithBuffer = window.startMs - MUTE_ADVANCE_MS;
@@ -310,7 +315,7 @@ export class CueIndex {
       const window = this.findProfanityWindow(timestampMs, offsetMs);
       if (window) {
         const cue = this.cueById.get(window.cueId) || null;
-        return { shouldMute: true, window, cue };
+        return { shouldMute: true, window: window, cue };
       }
       return { shouldMute: false, window: null, cue: null };
     }

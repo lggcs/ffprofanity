@@ -726,7 +726,7 @@ export function getRandomSubstitution(
   if (!options || options.length === 0) return null;
 
   // Return random option
-  return options[Math.floor(Math.random() * options.length)];
+  return options[Math.floor(Math.random() * options.length)] ?? null;
 }
 
 /**

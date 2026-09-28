@@ -308,6 +308,7 @@ function monitorVideoTextTracks(): void {
 
         for (let i = 0; i < video.textTracks.length; i++) {
           const track = video.textTracks[i];
+          if (!track) continue;
 
           // Fandango uses kind="metadata" — we need to check those too
           const isSubtitleTrack =

@@ -79,10 +79,10 @@ export class OneTwoThreeChillExtractor extends BaseExtractor {
       const urlObj = new URL(url);
       // Pattern: /watch/movie/{tmdb_id} or /watch/tv/{tmdb_id}/season/{s}/episode/{e}
       const movieMatch = urlObj.pathname.match(/\/watch\/movie\/(\d+)/i);
-      if (movieMatch) return movieMatch[1];
+      if (movieMatch) return movieMatch[1] ?? null;
 
       const tvMatch = urlObj.pathname.match(/\/watch\/tv\/(\d+)/i);
-      if (tvMatch) return tvMatch[1];
+      if (tvMatch) return tvMatch[1] ?? null;
 
       return null;
     } catch {

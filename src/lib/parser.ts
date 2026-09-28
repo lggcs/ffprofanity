@@ -26,10 +26,10 @@ function parseSRTTimestamp(timestamp: string): number {
   const match = timestamp.match(/(\d{2}):(\d{2}):(\d{2})[,\.](\d{3})/);
   if (!match) return 0;
 
-  const hours = parseInt(match[1], 10) * 3600000;
-  const minutes = parseInt(match[2], 10) * 60000;
-  const seconds = parseInt(match[3], 10) * 1000;
-  const millis = parseInt(match[4], 10);
+  const hours = parseInt(match[1] ?? "", 10) * 3600000;
+  const minutes = parseInt(match[2] ?? "", 10) * 60000;
+  const seconds = parseInt(match[3] ?? "", 10) * 1000;
+  const millis = parseInt(match[4] ?? "", 10);
 
   return hours + minutes + seconds + millis;
 }
@@ -41,19 +41,19 @@ function parseVTTTimestamp(timestamp: string): number {
   // Try full format first
   let match = timestamp.match(/(\d{2}):(\d{2}):(\d{2})\.(\d{3})/);
   if (match) {
-    const hours = parseInt(match[1], 10) * 3600000;
-    const minutes = parseInt(match[2], 10) * 60000;
-    const seconds = parseInt(match[3], 10) * 1000;
-    const millis = parseInt(match[4], 10);
+    const hours = parseInt(match[1] ?? "", 10) * 3600000;
+    const minutes = parseInt(match[2] ?? "", 10) * 60000;
+    const seconds = parseInt(match[3] ?? "", 10) * 1000;
+    const millis = parseInt(match[4] ?? "", 10);
     return hours + minutes + seconds + millis;
   }
 
   // Try short format (mm:ss.ms)
   match = timestamp.match(/(\d{2}):(\d{2})\.(\d{3})/);
   if (match) {
-    const minutes = parseInt(match[1], 10) * 60000;
-    const seconds = parseInt(match[2], 10) * 1000;
-    const millis = parseInt(match[3], 10);
+    const minutes = parseInt(match[1] ?? "", 10) * 60000;
+    const seconds = parseInt(match[2] ?? "", 10) * 1000;
+    const millis = parseInt(match[3] ?? "", 10);
     return minutes + seconds + millis;
   }
 
@@ -67,10 +67,10 @@ function parseASSTimestamp(timestamp: string): number {
   const match = timestamp.match(/(\d+):(\d{2}):(\d{2})\.(\d{2})/);
   if (!match) return 0;
 
-  const hours = parseInt(match[1], 10) * 3600000;
-  const minutes = parseInt(match[2], 10) * 60000;
-  const seconds = parseInt(match[3], 10) * 1000;
-  const centis = parseInt(match[4], 10) * 10;
+  const hours = parseInt(match[1] ?? "", 10) * 3600000;
+  const minutes = parseInt(match[2] ?? "", 10) * 60000;
+  const seconds = parseInt(match[3] ?? "", 10) * 1000;
+  const centis = parseInt(match[4] ?? "", 10) * 10;
 
   return hours + minutes + seconds + centis;
 }
@@ -81,11 +81,11 @@ export function parseXTimestampMap(content: string): XTimestampMap | null {
   );
   if (!match) return null;
 
-  const mpegTs = parseInt(match[1], 10);
-  const hours = parseInt(match[2], 10);
-  const minutes = parseInt(match[3], 10);
-  const seconds = parseInt(match[4], 10);
-  const millis = parseInt(match[5], 10);
+  const mpegTs = parseInt(match[1] ?? "", 10);
+  const hours = parseInt(match[2] ?? "", 10);
+  const minutes = parseInt(match[3] ?? "", 10);
+  const seconds = parseInt(match[4] ?? "", 10);
+  const millis = parseInt(match[5] ?? "", 10);
 
   const localMs = (hours * 3600 + minutes * 60 + seconds) * 1000 + millis;
   const offsetMs = Math.round(mpegTs / 90) - localMs;
@@ -176,8 +176,9 @@ export function parseSRT(content: string): Cue[] {
     let cueId = id;
 
     // Check if first line is a number (cue ID)
-    if (lines[0].match(/^\d+$/)) {
-      cueId = parseInt(lines[0], 10);
+    const firstLine = lines[0];
+    if (firstLine && firstLine.match(/^\d+$/)) {
+      cueId = parseInt(firstLine, 10);
       idx = 1;
     }
 
@@ -190,8 +191,8 @@ export function parseSRT(content: string): Cue[] {
     );
     if (!timestampMatch) continue;
 
-    const startMs = parseSRTTimestamp(timestampMatch[1]);
-    const endMs = parseSRTTimestamp(timestampMatch[2]);
+    const startMs = parseSRTTimestamp(timestampMatch[1] ?? "");
+    const endMs = parseSRTTimestamp(timestampMatch[2] ?? "");
 
     // Rest is text
     const text = lines
@@ -220,27 +221,27 @@ export function parseVTT(content: string, offsetMs: number = 0): Cue[] {
   let id = 0;
 
   // Skip WEBVTT header and X-TIMESTAMP-MAP
-  while (i < lines.length && !lines[i].match(/\d{2}:\d{2}/)) {
+  while (i < lines.length && !(lines[i] ?? "").match(/\d{2}:\d{2}/)) {
     i++;
   }
 
   while (i < lines.length) {
-    const timestampMatch = lines[i].match(
+    const timestampMatch = (lines[i] ?? "").match(
       /(\d{2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/,
     );
 
     if (timestampMatch) {
-      const startMs = parseVTTTimestamp(timestampMatch[1]);
-      const endMs = parseVTTTimestamp(timestampMatch[2]);
+      const startMs = parseVTTTimestamp(timestampMatch[1] ?? "");
+      const endMs = parseVTTTimestamp(timestampMatch[2] ?? "");
 
       const textLines: string[] = [];
       i++;
       while (
         i < lines.length &&
-        lines[i].trim() &&
-        !lines[i].match(/\d{2}:\d{2}/)
+        (lines[i] ?? "").trim() &&
+        !(lines[i] ?? "").match(/\d{2}:\d{2}/)
       ) {
-        textLines.push(lines[i].trim());
+        textLines.push((lines[i] ?? "").trim());
         i++;
       }
 
@@ -381,23 +382,23 @@ export function parseYouTubeXML(content: string): Cue[] {
     // Handle seconds (e.g., "2.5", "2.500")
     const floatMatch = timeStr.match(/^(\d+(?:\.\d+)?)$/);
     if (floatMatch) {
-      return Math.round(parseFloat(floatMatch[1]) * 1000);
+      return Math.round(parseFloat(floatMatch[1] ?? "") * 1000);
     }
 
     // Handle HH:MM:SS.mmm format
     const fullMatch = timeStr.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
     if (fullMatch) {
-      const hours = parseInt(fullMatch[1], 10) * 3600000;
-      const minutes = parseInt(fullMatch[2], 10) * 60000;
-      const seconds = Math.round(parseFloat(fullMatch[3]) * 1000);
+      const hours = parseInt(fullMatch[1] ?? "", 10) * 3600000;
+      const minutes = parseInt(fullMatch[2] ?? "", 10) * 60000;
+      const seconds = Math.round(parseFloat(fullMatch[3] ?? "") * 1000);
       return hours + minutes + seconds;
     }
 
     // Handle MM:SS.mmm format
     const shortMatch = timeStr.match(/(\d+):(\d+(?:\.\d+)?)/);
     if (shortMatch) {
-      const minutes = parseInt(shortMatch[1], 10) * 60000;
-      const seconds = Math.round(parseFloat(shortMatch[2]) * 1000);
+      const minutes = parseInt(shortMatch[1] ?? "", 10) * 60000;
+      const seconds = Math.round(parseFloat(shortMatch[2] ?? "") * 1000);
       return minutes + seconds;
     }
 

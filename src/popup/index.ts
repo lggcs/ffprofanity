@@ -322,13 +322,14 @@ async function loadStatus(): Promise<void> {
       active: true,
       currentWindow: true,
     });
-    if (!tab.id) return;
+    const tabId = tab?.id;
+    if (!tabId) return;
 
     // Try to get status from background (aggregates from all frames)
     try {
       const response = (await browser.runtime.sendMessage({
         type: "getAggregatedStatus",
-        tabId: tab.id,
+        tabId,
       })) as {
         active: boolean;
         cueCount: number;
@@ -348,7 +349,7 @@ async function loadStatus(): Promise<void> {
     } catch {
       // Background script not available, try direct content script query
       try {
-        const response = (await browser.tabs.sendMessage(tab.id, {
+        const response = (await browser.tabs.sendMessage(tabId, {
           type: "getStatus",
         })) as {
           active: boolean;
@@ -520,10 +521,11 @@ function renderTrackOptions(): void {
 
 async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
+  const tabId = tab?.id;
+  if (!tabId) return;
 
   try {
-    await browser.tabs.sendMessage(tab.id, {
+    await browser.tabs.sendMessage(tabId, {
       type: "selectTrack",
       trackId: track.id,
     });
@@ -537,12 +539,13 @@ async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
 
 async function handleToggle(): Promise<void> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
+  const tabId = tab?.id;
+  if (!tabId) return;
 
   const newEnabled = !isActive;
   const message = newEnabled
-    ? { type: "enable", tabId: tab.id }
-    : { type: "disable", tabId: tab.id };
+    ? { type: "enable", tabId }
+    : { type: "disable", tabId };
 
   // Persist the enabled state so it survives navigation and re-injection
   try {
@@ -576,12 +579,13 @@ async function handleUploadClick(): Promise<void> {
   // directly on the video page. This avoids the Firefox bug where
   // popup panels close when the native file picker opens.
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id) return;
+  const tabId = tab?.id;
+  if (!tabId) return;
 
   try {
     await browser.runtime.sendMessage({
       type: "showUploadOverlay",
-      tabId: tab.id,
+      tabId,
     });
     // Close the popup since the overlay is now shown on the video page
     window.close();
@@ -607,7 +611,8 @@ interface DriftStatus {
  */
 async function getActiveTabId(): Promise<number | null> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  return tab.id ?? null;
+  const tabId = tab?.id;
+  return tabId ?? null;
 }
 
 /**
@@ -702,7 +707,7 @@ function showDriftResult(message: string): void {
 
 async function handleUnload(): Promise<void> {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab.id;
+  const tabId = tab?.id;
   if (!tabId) return;
 
   try {

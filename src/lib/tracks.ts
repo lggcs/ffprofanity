@@ -216,7 +216,7 @@ export function createTrackFromUser(
 ): SubtitleTrack {
   // Try to extract language from filename
   const langMatch = filename.match(/[\.\-_](en|es|fr|de|pt|it|ja|ko|zh|ar|ru)[\.\-_]/i);
-  const language = langMatch ? langMatch[1].toLowerCase() : '';
+  const language = langMatch?.[1]?.toLowerCase() ?? '';
   
   // Determine format from filename
   const ext = filename.split('.').pop()?.toLowerCase();

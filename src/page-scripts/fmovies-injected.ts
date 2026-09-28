@@ -118,6 +118,7 @@ function monitorVideoTextTracks(): void {
         if (video.textTracks && video.textTracks.length > 0) {
           for (let i = 0; i < video.textTracks.length; i++) {
             const track = video.textTracks[i];
+            if (!track) continue;
             if (
               (track.kind === "subtitles" || track.kind === "captions") &&
               track.cues &&
@@ -280,6 +281,7 @@ function hideNativeSubtitles(): void {
       if (video.textTracks) {
         for (let i = 0; i < video.textTracks.length; i++) {
           const track = video.textTracks[i];
+          if (!track) continue;
           if (
             (track.kind === "subtitles" || track.kind === "captions") &&
             track.mode !== "disabled"

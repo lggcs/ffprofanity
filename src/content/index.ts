@@ -798,6 +798,7 @@ function hideNativeSubtitlesForSite(source: string): void {
         log(`Found ${tracks.length} Video.js text tracks`);
         for (let i = 0; i < tracks.length; i++) {
           const track = tracks[i];
+          if (!track) continue;
           if (track.kind === 'subtitles' || track.kind === 'captions') {
             if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
             if (track.mode !== 'disabled') {
@@ -818,6 +819,7 @@ function hideNativeSubtitlesForSite(source: string): void {
           const tracks = player.textTracks();
           for (let i = 0; i < tracks.length; i++) {
             const track = tracks[i];
+            if (!track) continue;
             if (track.kind === 'subtitles' || track.kind === 'captions') {
               if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
               if (track.mode !== 'disabled') {
@@ -840,6 +842,7 @@ function hideNativeSubtitlesForSite(source: string): void {
       if (video.textTracks) {
         for (let i = 0; i < video.textTracks.length; i++) {
           const track = video.textTracks[i];
+          if (!track) continue;
           if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
             if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
             log(`Disabling native <track> element: ${track.label || track.language}`);
@@ -931,7 +934,9 @@ function hideNativeSubtitlesForSite(source: string): void {
     ],
   };
 
-  const selectors = hideSelectors[site] || hideSelectors[site.split('.')[0]];
+  const selectors =
+    (site && hideSelectors[site]) ||
+    (site && hideSelectors[site.split('.')[0] ?? ""]);
 
   if (selectors) {
     // Inject CSS to hide native subtitles
@@ -945,7 +950,7 @@ function hideNativeSubtitlesForSite(source: string): void {
     }
 
     // Add CSS rules with visibility:hidden instead of display:none (display:none can break layout)
-    const css = selectors.map(s => `${s} { visibility: hidden !important; opacity: 0 !important; }`).join('\n');
+    const css = selectors.map((s: string) => `${s} { visibility: hidden !important; opacity: 0 !important; }`).join('\n');
     style.textContent = css;
 
     log(`Injected CSS to hide native subtitles`);
@@ -1009,6 +1014,7 @@ function hideNativeSubtitlesForSite(source: string): void {
           if (video.textTracks) {
             for (let i = 0; i < video.textTracks.length; i++) {
               const track = video.textTracks[i];
+              if (!track) continue;
               if ((track.kind === 'subtitles' || track.kind === 'captions') && track.mode !== 'disabled') {
                 if (isAdoptedNativeTrack(track)) continue; // auto-drift reference clock
                 track.mode = 'disabled';
@@ -1366,6 +1372,8 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     }
 
     const trackToSelect = tracks[0];
+    if (!trackToSelect) return;
+
     const existingTrack = detectedTracks.find(
       (t) => t.url === trackToSelect.url || t.id === trackToSelect.id,
     );
@@ -1711,8 +1719,10 @@ function findVideoElement(): void {
           // Check descendants for video
           const nestedVideos = Array.from(node.querySelectorAll("video"));
           if (nestedVideos.length > 0) {
+            const firstNestedVideo = nestedVideos[0];
+            if (!firstNestedVideo) continue;
             log("Video found in added subtree");
-            videoElement = nestedVideos[0];
+            videoElement = firstNestedVideo;
             attachVideoListeners(videoElement);
             // Start monitoring if we have cues ready
             if (cues.length > 0 && !animationFrameId) {
@@ -1798,8 +1808,10 @@ function findTimeDisplayElement(): void {
   candidates.sort((a, b) => a.position - b.position);
   
   // Take the leftmost as current time, second-leftmost as duration
-  timeDisplayElement = candidates[0].element;
-  log(`Found time display element: "${candidates[0].element.textContent?.trim()}" (${candidates.length} candidates, using leftmost)`);
+  const leftmost = candidates[0];
+  if (!leftmost) return;
+  timeDisplayElement = leftmost.element;
+  log(`Found time display element: "${leftmost.element.textContent?.trim()}" (${candidates.length} candidates, using leftmost)`);
 }
 
 /**
@@ -1807,11 +1819,11 @@ function findTimeDisplayElement(): void {
  */
 function parseTimeString(timeStr: string): number | null {
   const parts = timeStr.split(':').map(p => parseInt(p, 10));
-  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-    return (parts[0] * 60 + parts[1]) * 1000;
+  if (parts.length === 2 && !isNaN(parts[0] ?? NaN) && !isNaN(parts[1] ?? NaN)) {
+    return ((parts[0] ?? 0) * 60 + (parts[1] ?? 0)) * 1000;
   }
-  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-    return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+  if (parts.length === 3 && !isNaN(parts[0] ?? NaN) && !isNaN(parts[1] ?? NaN) && !isNaN(parts[2] ?? NaN)) {
+    return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * 1000;
   }
   return null;
 }
@@ -2741,11 +2753,11 @@ function applyDisplaySettings(): void {
     overlayContainer.style.bottom = "auto";
     overlayContainer.style.transform = "translateX(-50%) translateY(-50%)";
   } else if (settings.position === "top") {
-    overlayContainer.style.top = positions.top;
+    overlayContainer.style.top = positions.top ?? "80px";
     overlayContainer.style.bottom = "auto";
     overlayContainer.style.transform = "translateX(-50%)";
   } else {
-    overlayContainer.style.bottom = positions.bottom;
+    overlayContainer.style.bottom = positions.bottom ?? "80px";
     overlayContainer.style.top = "auto";
     overlayContainer.style.transform = "translateX(-50%)";
   }
@@ -3655,7 +3667,9 @@ function processCues(newCues: Cue[]): void {
   if (cues.length > 1) {
     let isSorted = true;
     for (let i = 1; i < cues.length; i++) {
-      if (cues[i].startMs < cues[i - 1].startMs) {
+      const prev = cues[i - 1];
+      const curr = cues[i];
+      if (prev && curr && curr.startMs < prev.startMs) {
         isSorted = false;
         break;
       }
@@ -3781,9 +3795,11 @@ function startMonitoring(): void {
 
     if (validVideos.length > 0) {
       // Found a valid content video - use it instead
-      log(`Found main content video (duration=${validVideos[0].duration?.toFixed(2)}s) instead of ad video`);
-      videoElement = validVideos[0];
-      attachVideoListeners(videoElement);
+      const validVideo = validVideos[0];
+      if (!validVideo) return;
+      log(`Found main content video (duration=${validVideo.duration?.toFixed(2)}s) instead of ad video`);
+      videoElement = validVideo;
+      attachVideoListeners(validVideo);
       findTimeDisplayElement();
     } else {
       // No valid video found - defer monitoring until ad ends

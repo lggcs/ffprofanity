@@ -20,22 +20,24 @@ export function parseHLSManifest(content: string, baseUrl: string): SubtitleTrac
   } | null = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const line = lines[i];
+    if (line === undefined) continue;
+    const lineTrim = line.trim();
 
-    if (line.startsWith("#EXT-X-MEDIA:TYPE=SUBTITLES")) {
+    if (lineTrim.startsWith("#EXT-X-MEDIA:TYPE=SUBTITLES")) {
       currentInfo = { type: "subtitles" };
-      const attrs = line.slice("#EXT-X-MEDIA:".length);
+      const attrs = lineTrim.slice("#EXT-X-MEDIA:".length);
       const langMatch = attrs.match(/LANGUAGE="([^"]+)"/i);
       const nameMatch = attrs.match(/NAME="([^"]+)"/i);
       const groupIdMatch = attrs.match(/GROUP-ID="([^"]+)"/i);
 
-      if (langMatch) currentInfo.language = langMatch[1].toLowerCase();
+      if (langMatch) currentInfo.language = langMatch[1]?.toLowerCase();
       if (nameMatch) currentInfo.label = nameMatch[1];
       if (groupIdMatch) currentInfo.groupId = groupIdMatch[1];
     }
 
-    if (currentInfo && currentInfo.type === "subtitles" && !line.startsWith("#") && line.length > 0) {
-      const subUrl = new URL(line, baseUrl).href;
+    if (currentInfo && currentInfo.type === "subtitles" && !lineTrim.startsWith("#") && lineTrim.length > 0) {
+      const subUrl = new URL(lineTrim, baseUrl).href;
       subs.push({
         url: subUrl,
         language: currentInfo.language || "unknown",

@@ -444,13 +444,15 @@ function findTrackForSelectedItem(menuItem: Element): SubtitleTrack | null {
 
     if (typeof videojs.getPlayerIds === "function") {
       const playerIds = videojs.getPlayerIds() as string[];
-      if (playerIds.length > 0) {
-        player = videojs.getPlayer.call(videojs, playerIds[0]);
+      const firstId = playerIds[0];
+      if (firstId !== undefined) {
+        player = videojs.getPlayer.call(videojs, firstId);
       }
     } else if (videojs.players) {
       const playerIds = Object.keys(videojs.players);
-      if (playerIds.length > 0) {
-        player = videojs.players[playerIds[0]];
+      const firstId = playerIds[0];
+      if (firstId !== undefined) {
+        player = videojs.players[firstId];
       }
     }
 
@@ -512,9 +514,10 @@ function findTrackForSelectedItem(menuItem: Element): SubtitleTrack | null {
 
       log(`findTrackForSelectedItem: found ${sameLangTracks.length} tracks for language "${selectedLang}"`);
 
-      const targetIndex = parseInt(selectedNumber, 10);
+      const targetIndex = parseInt(selectedNumber ?? "", 10);
       if (targetIndex > 0 && targetIndex <= sameLangTracks.length) {
         const selectedTrack = sameLangTracks[targetIndex - 1];
+        if (!selectedTrack) return null;
         log(`findTrackForSelectedItem: using track #${targetIndex} for "${selectedText}": ${selectedTrack.url.substring(0, 60)}`);
         return { url: selectedTrack.url, language: selectedTrack.language, label: selectedText };
       }

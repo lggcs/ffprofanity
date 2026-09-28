@@ -55,8 +55,11 @@ export function countSyllables(word: string): number {
   }
   
   // Adjust for 'le' at end (like "table")
-  if (cleanWord.endsWith('le') && cleanWord.length > 2 && !vowels.includes(cleanWord[cleanWord.length - 3])) {
-    count++;
+  if (cleanWord.endsWith('le') && cleanWord.length > 2) {
+    const thirdLast = cleanWord[cleanWord.length - 3];
+    if (thirdLast === undefined || !vowels.includes(thirdLast)) {
+      count++;
+    }
   }
   
   // Adjust for 'ed' at end (often adds syllable only if preceded by t/d)
@@ -426,25 +429,35 @@ export function levenshteinDistance(a: string, b: string): number {
     matrix[i] = [i];
   }
 
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
+  const firstRow = matrix[0];
+  if (firstRow) {
+    for (let j = 0; j <= a.length; j++) {
+      firstRow[j] = j;
+    }
   }
 
   for (let i = 1; i <= b.length; i++) {
+    const prevRow = matrix[i - 1];
+    const currentRow = matrix[i];
+    if (!prevRow || !currentRow) continue;
+
     for (let j = 1; j <= a.length; j++) {
       if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
+        const diag = prevRow[j - 1];
+        if (diag === undefined) continue;
+        currentRow[j] = diag;
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
+        const diag = prevRow[j - 1];
+        const left = currentRow[j - 1];
+        const up = prevRow[j];
+        if (diag === undefined || left === undefined || up === undefined) continue;
+        currentRow[j] = Math.min(diag + 1, left + 1, up + 1);
       }
     }
   }
 
-  return matrix[b.length][a.length];
+  const lastRow = matrix[b.length];
+  return lastRow?.[a.length] ?? a.length + b.length;
 }
 
 /**
@@ -623,7 +636,7 @@ export class ProfanityDetector {
     // No need to look up the substitution map since all entries are identical
     if (this.substitutionCategory === 'monkeys') {
       const MONKEY_EMOJIS = ['🙈', '🙉', '🙊'] as const;
-      return MONKEY_EMOJIS[Math.floor(Math.random() * MONKEY_EMOJIS.length)];
+      return MONKEY_EMOJIS[Math.floor(Math.random() * MONKEY_EMOJIS.length)] ?? null;
     }
 
     // Check default substitution map
@@ -726,9 +739,13 @@ export class ProfanityDetector {
       phraseRegex.lastIndex = 0; // Reset for reuse
       for (let m: RegExpExecArray | null = phraseRegex.exec(text); m !== null; m = phraseRegex.exec(text)) {
         const match = m;
+        const matchedPhrase = match[2];
+        if (matchedPhrase === undefined) continue;
+        const prefix = match[1];
+        if (prefix === undefined) continue;
         // The actual match starts after the prefix group
-        const actualStart = match.index + match[1].length;
-        const actualEnd = actualStart + match[2].length;
+        const actualStart = match.index + prefix.length;
+        const actualEnd = actualStart + matchedPhrase.length;
 
         // Skip religious whitelist phrases when sensitivity is 'low'
         if (this.sensitivity === 'low' && RELIGIOUS_WHITELIST.has(phrase)) {
@@ -741,7 +758,7 @@ export class ProfanityDetector {
         }
 
         matches.push({
-          word: match[2], // The actual matched phrase (group 2)
+          word: matchedPhrase, // The actual matched phrase (group 2)
           startIndex: actualStart,
           endIndex: actualEnd,
           type: 'exact',

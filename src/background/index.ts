@@ -589,7 +589,7 @@ browser.webRequest.onCompleted.addListener(
 
     // Extract language from URL or filename
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
-    const language = langMatch ? langMatch[1].toLowerCase() : undefined;
+    const language = langMatch?.[1]?.toLowerCase();
 
     // Extract label - use human-readable language name instead of filename hash
     // The page script will send tracks with numbered labels (e.g., "English 1", "English 2")

@@ -145,11 +145,13 @@ function plutoTVPageScript(): void {
       const vttUrls: string[] = [];
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line.startsWith("#") || line.length === 0) continue;
+        const line = lines[i];
+        if (!line) continue;
+        const trimmed = line.trim();
+        if (trimmed.startsWith("#") || trimmed.length === 0) continue;
 
-        if (line.includes(".vtt") || line.includes("/webvtt/") || line.includes("webvtt")) {
-          const absoluteUrl = new URL(line, manifestUrl).href;
+        if (trimmed.includes(".vtt") || trimmed.includes("/webvtt/") || trimmed.includes("webvtt")) {
+          const absoluteUrl = new URL(trimmed, manifestUrl).href;
           vttUrls.push(absoluteUrl);
         }
       }
@@ -179,7 +181,8 @@ function plutoTVPageScript(): void {
       url.match(/mtp%3D(\d+)/i) ||
       url.match(/mtp%3A(\d+)/i) ||
       url.match(/[&?]mtp=(\d+)/i);
-    const mtpTime = mtpMatch ? parseInt(mtpMatch[1], 10) / 1000 : 0;
+    const mtpGroup = mtpMatch?.[1];
+    const mtpTime = mtpGroup ? parseInt(mtpGroup, 10) / 1000 : 0;
     const segmentLoadTime = mtpTime > 0 ? mtpTime : videoEl ? videoEl.currentTime : 0;
     const streamType = isLiveTVPage ? "live" : "vod";
 
@@ -237,6 +240,7 @@ function plutoTVPageScript(): void {
 
         for (let trackIdx = 0; trackIdx < textTracks.length; trackIdx++) {
           const track = textTracks[trackIdx];
+          if (!track) continue;
           if (track.kind !== "subtitles" && track.kind !== "captions") continue;
           if (track.mode !== "showing" && track.mode !== "hidden") continue;
           if (!track.cues || track.cues.length === 0) continue;

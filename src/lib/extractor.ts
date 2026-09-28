@@ -151,11 +151,11 @@ class SubtitleUrlDetector {
 
     // Extract language from URL if possible
     const langMatch = url.match(/[_\-\/]([a-z]{2,3})(?:[_\-\.]|$)/i);
-    const language = langMatch ? langMatch[1].toLowerCase() : undefined;
+    const language = langMatch?.[1]?.toLowerCase();
 
     // Extract label from URL
     const labelMatch = url.match(/\/([^\/]+)\.(?:vtt|srt|ass|ssa)$/i);
-    const label = labelMatch
+    const label = labelMatch?.[1]
       ? labelMatch[1].replace(/[_\-\+]/g, " ")
       : undefined;
 
@@ -220,7 +220,9 @@ export function parseM3U8Subtitles(
   } = {};
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const line = lines[i];
+    if (line === undefined) continue;
+    const lineTrim = line.trim();
 
     // Parse EXT-X-MEDIA tag for subtitles
     if (line.startsWith("#EXT-X-MEDIA:TYPE=SUBTITLES")) {
@@ -237,11 +239,12 @@ export function parseM3U8Subtitles(
 
     // If we're in subtitle mode, next non-comment line is the URL
     if (
+      lineTrim &&
       currentInfo.type === "subtitles" &&
-      !line.startsWith("#") &&
-      line.length > 0
+      !lineTrim.startsWith("#") &&
+      lineTrim.length > 0
     ) {
-      currentInfo.url = new URL(line, baseUrl).href;
+      currentInfo.url = new URL(lineTrim, baseUrl).href;
 
       if (currentInfo.url && currentInfo.language) {
         const track = createTrackFromNetwork(
@@ -295,6 +298,7 @@ export function extractFromPageScripts(): SubtitleTrack[] {
 
       while ((match = pattern.exec(content)) !== null) {
         const url = match[1];
+        if (url === undefined) continue;
 
         // Ensure URL is absolute
         try {
