@@ -2292,6 +2292,7 @@ function setupAutoDriftWatch(): void {
     if (!driftCorrector.canCaptureAuto(Date.now(), autoDriftLastAttemptMs)) return;
     autoDriftLastAttemptMs = Date.now();
 
+    const hadModel = driftCorrector.current !== null;
     const result = driftCorrector.addAnchor(
       videoMs,
       match.cue.startMs,
@@ -2308,6 +2309,17 @@ function setupAutoDriftWatch(): void {
     );
 
     applyDriftModelToIndex();
+
+    // First auto lock-on absorbs any manual trim: the anchors are raw
+    // video↔subtitle pairs read off the native track's correct timebase,
+    // so the user's slider value is already encoded in the fit. A
+    // non-zero slider on top would double-correct.
+    if (!hadModel && driftCorrector.current && settings.offsetMs !== 0) {
+      settings.offsetMs = 0;
+      storage.setSetting("offsetMs", 0).catch(() => {});
+      showNotification("info", "Auto sync locked on — offset slider reset to 0", false);
+    }
+
     saveDriftRecord();
   };
 
