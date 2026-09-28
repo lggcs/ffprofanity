@@ -129,6 +129,47 @@ function updatePopupUpcomingCuesState(): void {
   }
 }
 
+/**
+ * True when the popup is running as a regular tab instead of a desktop
+ * panel — Firefox Android opens action popups as tabs.
+ */
+async function isRunningAsTab(): Promise<boolean> {
+  const [selfTab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return selfTab?.url?.startsWith("moz-extension://") ?? false;
+}
+
+/**
+ * Resolve the tab the content script lives in (the video tab).
+ *
+ * On Firefox Android the action popup opens as its own tab, so the naive
+ * "active tab" query resolves to the popup itself and every per-tab
+ * message targets the wrong tab. Detect that case and fall back to the
+ * most recently active regular web tab instead.
+ */
+async function getVideoTabId(): Promise<number | null> {
+  const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const activeUrl = activeTab?.url;
+  if (
+    activeUrl &&
+    (activeUrl.startsWith("moz-extension://") ||
+      activeUrl.startsWith("about:") ||
+      activeUrl.startsWith("chrome://"))
+  ) {
+    const candidates = await browser.tabs.query({ active: false });
+    const videoTab = candidates
+      .filter((t) => {
+        const url = t.url ?? "";
+        return (
+          (url.startsWith("http://") || url.startsWith("https://")) &&
+          !t.discarded
+        );
+      })
+      .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
+    return videoTab?.id ?? null;
+  }
+  return activeTab?.id ?? null;
+}
+
 async function loadSettings(): Promise<void> {
   try {
     const result = await browser.storage.local.get("settings") as { settings?: Partial<Settings> };
@@ -261,6 +302,25 @@ async function saveSettings(): Promise<void> {
       },
     });
 
+    // Verify the write actually landed — Firefox Android can silently drop
+    // pending writes when the popup tab is discarded after a Save tap
+    const verifyRead = (await browser.storage.local.get("settings")) as { settings?: Settings };
+    const merged = { ...existingSettings.settings, ...newSettings };
+    const writeLanded =
+      verifyRead.settings !== undefined &&
+      Object.keys(merged).every(
+        (key) =>
+          JSON.stringify(verifyRead.settings?.[key as keyof Settings]) ===
+          JSON.stringify(merged[key as keyof Settings]),
+      );
+    if (!writeLanded) {
+      const saveBtnRetry = document.getElementById("saveSettings") as HTMLButtonElement;
+      saveBtnRetry.textContent = "Save failed — try again";
+      saveBtnRetry.disabled = false;
+      error("Settings write did not persist after re-read; not switching views");
+      return;
+    }
+
     // Notify content scripts in all tabs of settings change
     const tabs = await browser.tabs.query({});
     for (const tab of tabs) {
@@ -282,8 +342,12 @@ async function saveSettings(): Promise<void> {
       saveBtn.disabled = false;
     }, 1500);
 
-    // Switch back to main view after a short delay
-    setTimeout(showMainView, 800);
+    // On desktop the panel auto-returns to the main view. When running as
+    // a tab (Firefox Android), stay put — the user still has the panel
+    // visible and there is no tab-discard race to race against here.
+    if (!(await isRunningAsTab())) {
+      setTimeout(showMainView, 800);
+    }
   } catch (err) {
     error("Failed to save settings:", err);
   }
@@ -317,12 +381,8 @@ function showMainView(): void {
 
 async function loadStatus(): Promise<void> {
   try {
-    // Get current tab
-    const [tab] = await browser.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    const tabId = tab?.id;
+    // Get current tab (popup may be running as its own tab on Firefox Android)
+    const tabId = await getVideoTabId();
     if (!tabId) return;
 
     // Try to get status from background (aggregates from all frames)
@@ -520,8 +580,7 @@ function renderTrackOptions(): void {
 }
 
 async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id;
+  const tabId = await getVideoTabId();
   if (!tabId) return;
 
   try {
@@ -538,8 +597,7 @@ async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
 }
 
 async function handleToggle(): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id;
+  const tabId = await getVideoTabId();
   if (!tabId) return;
 
   const newEnabled = !isActive;
@@ -561,11 +619,36 @@ async function handleToggle(): Promise<void> {
   }
 
   // Route through background so it can relay to ALL frames and
-  // release any active tab mute state
+  // release any active tab mute state. On Android the background may
+  // fail to wake; fall back to direct all-frames delivery + mute release.
+  let delivered = false;
   try {
     await browser.runtime.sendMessage(message);
+    delivered = true;
   } catch {
-    error("Failed to send toggle message via background");
+    error("Background relay failed; falling back to direct delivery");
+  }
+  if (!delivered) {
+    // Replicate background behavior: enable/disable every frame, and on
+    // disable release any reference-counted mute state.
+    try {
+      const frames = await browser.webNavigation.getAllFrames({ tabId });
+      for (const frame of frames ?? []) {
+        browser.tabs
+          .sendMessage(tabId, newEnabled ? { type: "enable" } : { type: "disable" }, {
+            frameId: frame.frameId,
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // webNavigation unavailable — try top frame only
+      browser.tabs
+        .sendMessage(tabId, newEnabled ? { type: "enable" } : { type: "disable" })
+        .catch(() => {});
+    }
+    if (!newEnabled) {
+      browser.tabs.update(tabId, { muted: false }).catch(() => {});
+    }
   }
 
   isActive = newEnabled;
@@ -578,8 +661,7 @@ async function handleUploadClick(): Promise<void> {
   // Send a message to the content script to show an upload overlay
   // directly on the video page. This avoids the Firefox bug where
   // popup panels close when the native file picker opens.
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id;
+  const tabId = await getVideoTabId();
   if (!tabId) return;
 
   try {
@@ -587,8 +669,14 @@ async function handleUploadClick(): Promise<void> {
       type: "showUploadOverlay",
       tabId,
     });
-    // Close the popup since the overlay is now shown on the video page
-    window.close();
+    // Close the popup since the overlay is now shown on the video page.
+    // As a tab (Firefox Android) window.close() is a no-op for a
+    // user-opened tab, so switch back to the video tab instead.
+    if (await isRunningAsTab()) {
+      await browser.tabs.update(tabId, { active: true });
+    } else {
+      window.close();
+    }
   } catch (err) {
     error("Failed to show upload overlay:", err);
   }
@@ -610,9 +698,7 @@ interface DriftStatus {
  * Get the video tab id for the active window (null when none).
  */
 async function getActiveTabId(): Promise<number | null> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id;
-  return tabId ?? null;
+  return getVideoTabId();
 }
 
 /**
@@ -706,8 +792,7 @@ function showDriftResult(message: string): void {
 }
 
 async function handleUnload(): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id;
+  const tabId = await getVideoTabId();
   if (!tabId) return;
 
   try {
