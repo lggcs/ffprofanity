@@ -8,11 +8,12 @@ import { LookMovieExtractor } from "./lookmovie";
 import { YouTubeExtractor } from "./youtube";
 import { OneTwoThreeChillExtractor } from "./123chill";
 import { PlutoTVExtractor } from "./plutotv";
-import { FMoviesExtractor } from "./fmovies";
 import { JellyfinExtractor } from "./jellyfin";
 import { CinebtoExtractor } from "./cinebto";
 import { TwoEmbedExtractor } from "./2embed";
 import { FandangoExtractor } from "./fandango";
+import { BingeWatchExtractor } from "./bingewatch";
+import { CineLiteExtractor } from "./cinelite";
 import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
@@ -21,11 +22,12 @@ const extractors: SiteExtractor[] = [
   new YouTubeExtractor(),
   new OneTwoThreeChillExtractor(),
   new PlutoTVExtractor(),
-  new FMoviesExtractor(),
   new JellyfinExtractor(),
   new CinebtoExtractor(),
   new TwoEmbedExtractor(),
   new FandangoExtractor(),
+  new BingeWatchExtractor(),
+  new CineLiteExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -107,8 +109,9 @@ export { lookMovieExtractor } from "./lookmovie";
 export { youTubeExtractor } from "./youtube";
 export { oneTwoThreeChillExtractor } from "./123chill";
 export { plutotvExtractor } from "./plutotv";
-export { fmoviesExtractor } from "./fmovies";
 export { jellyfinExtractor } from "./jellyfin";
 export { cinebtoExtractor } from "./cinebto";
 export { twoEmbedExtractor } from "./2embed";
 export { fandangoExtractor } from "./fandango";
+export { bingewatchExtractor } from "./bingewatch";
+export { cineliteExtractor } from "./cinelite";

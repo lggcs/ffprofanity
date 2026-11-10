@@ -46,7 +46,6 @@ npm exec -- esbuild src/popup/index.ts --bundle --outfile=dist/popup.js --format
 echo "Bundling page-scripts..."
 npm exec -- esbuild src/page-scripts/plutotv-injected.ts --bundle --outfile=dist/page-scripts/plutotv-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/youtube-injected.ts --bundle --outfile=dist/page-scripts/youtube-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
-npm exec -- esbuild src/page-scripts/fmovies-injected.ts --bundle --outfile=dist/page-scripts/fmovies-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/lookmovie-injected.ts --bundle --outfile=dist/page-scripts/lookmovie-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/jellyfin-injected.ts --bundle --outfile=dist/page-scripts/jellyfin-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 npm exec -- esbuild src/page-scripts/cinebto-injected.ts --bundle --outfile=dist/page-scripts/cinebto-injected.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY

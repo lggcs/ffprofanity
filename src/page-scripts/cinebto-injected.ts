@@ -11,7 +11,7 @@
  * - Subtitle files (.vtt) are served from CDNs like cca.megafiles.store
  * - The video element is dynamically created inside div.video-container
  *
- * Unlike fmovies, this script MUST run in iframes because the video is in
+ * This script MUST run in iframes because the video is in
  * a nested iframe (111movies.net), not the top frame.
  */
 

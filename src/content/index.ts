@@ -97,7 +97,7 @@ let pendingSeekFrameCount: number = 0;
 let lastKnownTimeMs: number = 0; // Last known good time from display element
 let lastKnownTimeTimestamp: number = 0; // When we last read a valid time (for estimation)
 
-// Reference to time display element (for sites like fmovies where video.currentTime is unreliable)
+// Reference to time display element (for sites where video.currentTime is unreliable)
 let timeDisplayElement: HTMLElement | null = null;
 
 // Debouncing
@@ -901,8 +901,6 @@ function hideNativeSubtitlesForSite(source: string): void {
   // Map hostname patterns to site identifiers
   if (hostname.includes('lookmovie')) {
     site = 'lookmovie';
-  } else if (hostname.includes('fmovies')) {
-    site = 'fmovies';
   } else if (hostname.includes('123chill')) {
     site = '123chill';
   } else if (hostname.includes('youtube')) {
@@ -928,6 +926,12 @@ function hideNativeSubtitlesForSite(source: string): void {
   ) {
     // Cinebto / 111movies use FastStreamClient/FluidPlayer
     site = 'cinebto';
+  } else if (hostname.includes('cinelite')) {
+    // CineLite uses a custom in-house embed player (embed.cinelite.xyz)
+    site = 'cinelite';
+  } else if (hostname.includes('bingewatch') || /mfw\d+\./.test(hostname)) {
+    // Bingewatch serves its player from mfw*.org iframes running JW Player
+    site = 'bingewatch';
   } else if (source === 'user-upload' || source.startsWith('user-upload')) {
     // User-uploaded subtitles on embedded players - try to detect Video.js
     site = 'videojs-player';
@@ -1020,7 +1024,6 @@ function hideNativeSubtitlesForSite(source: string): void {
     'lookmovie.xhr-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     'lookmovie.fetch-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     'lookmovie.fetch-hls': ['.vjs-text-track-display', '.vjs-text-track-cue'],
-    'fmovies': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     '123chill': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     // Video.js-based iframe players (VidFast, VidSrc, etc.)
     'videojs-player': [
@@ -1083,6 +1086,23 @@ function hideNativeSubtitlesForSite(source: string): void {
     'cinebto.fetch-subtitle': [
       '.fluid_subtitles_container',
       '.vjs-text-track-display',
+      'video::cue',
+    ],
+    // BingeWatch player frames (mfw*.org) run JW Player
+    'bingewatch': [
+      '.jw-captions',
+      '.jw-captions-window',
+      '.jw-text-track-container',
+      '.jw-captions-container',
+      '.jw-text-track-cue',
+      'video::cue',
+    ],
+    // CineLite embed player (embed.cinelite.xyz)
+    'cinelite': [
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
+      '[class*="subtitle"]:not([class*="ffprofanity"])',
+      '[class*="caption"]:not([class*="ffprofanity"]):not([class*="icon"])',
       'video::cue',
     ],
   };
@@ -1231,10 +1251,10 @@ function handleSubtitleContent(
 
   let finalCues = rawResult.cues;
 
-  // FMovies/subs from video.textTracks are already perfectly synced with the player
+  // Subtitles from video.textTracks are already perfectly synced with the player
   // plutotv-texttracks: cues from HLS.js textTracks already have correct timing
   // Skip any timing adjustments for these sources
-  const isSyncedSource = source === "fmovies" || source === "Wyzie" || source === "Video Track" || source === "plutotv-texttracks" || label === "Video Track";
+  const isSyncedSource = source === "Video Track" || source === "plutotv-texttracks" || label === "Video Track";
   
   if (isSyncedSource) {
     // Trust the timestamps as-is - they're already in the video's timeline
@@ -1853,7 +1873,7 @@ function findVideoElement(): void {
       videoElement = videos[0] as HTMLVideoElement;
       attachVideoListeners(videoElement);
       
-      // Find time display element for sites like fmovies where video.currentTime is unreliable
+      // Find time display element for sites where video.currentTime is unreliable
       findTimeDisplayElement();
 
       // Start monitoring if we have cues and video found
@@ -1940,12 +1960,12 @@ function attachVideoListeners(video: HTMLVideoElement): void {
 
 /**
  * Find the time display element on the page
- * For sites like fmovies, the video.currentTime is affected by hover preview,
+ * On some sites the video.currentTime is affected by hover preview,
  * so we look for the displayed time element which shows the actual playback position
  */
 function findTimeDisplayElement(): void {
   // Look for elements that display time in MM:SS or HH:MM:SS format
-  // fmovies has: current time (left) and duration (right) in the player controls
+  // Player controls have: current time (left) and duration (right)
   // We want the current time which updates during playback
   
   const timePattern = /^\d{1,3}:\d{2}$/;
@@ -2002,8 +2022,6 @@ function parseTimeString(timeStr: string): number | null {
  * On these sites, we read the time from DOM elements instead.
  */
 const SITES_NEEDING_DISPLAY_TIME = [
-  /fmovies\.[a-z]+/i,
-  /fmovies\d*\.[a-z]+/i,
   /123movies\.[a-z]+/i,
   /123chill\.[a-z]+/i,
   /lookmovie\.[a-z]+/i,
@@ -2024,12 +2042,12 @@ function needsDisplayTimeTracking(): boolean {
 /**
  * Get current playback time in milliseconds
  * Primary: video.currentTime (reliable on YouTube and most sites)
- * Fallback: time display element (for fmovies and similar sites)
+ * Fallback: time display element (for sites with hover-preview timing quirks)
  */
 function getCurrentTimeMs(): { timeMs: number; source: string } {
   const now = performance.now();
 
-  // On sites where video.currentTime is unreliable (fmovies), use display element
+  // On sites where video.currentTime is unreliable, use display element
   if (needsDisplayTimeTracking()) {
     // Re-find time display element periodically
     if (!timeDisplayElement || !timeDisplayElement.isConnected) {
@@ -3924,10 +3942,9 @@ function processCues(newCues: Cue[]): void {
     }
   }
 
-  // For VOD sources (fmovies, etc.), detect if this is a replacement rather than incremental
+  // For player-synced VOD sources, detect if this is a replacement rather than incremental
   // If new cues have similar timing range to existing, replace instead of accumulate
-  const isSyncedSource = firstCueSource === 'fmovies' ||
-                         firstCueSource === 'wyzie';
+  const isSyncedSource = firstCueSource === 'Video Track';
   const isYouTubeSource = firstCueSource === 'youtube-intercepted' ||
                           firstCueSource === 'youtube';
   const isPlutoTVSource = firstCueSource.includes('plutotv');
@@ -4229,7 +4246,7 @@ function startMonitoring(): void {
       }
     }
 
-    // Use time display element if available (for sites like fmovies where video.currentTime is unreliable)
+    // Use time display element if available (for sites where video.currentTime is unreliable)
     // Otherwise fall back to video.currentTime
     const { timeMs: currentTimeMs, source: timeSource } = getCurrentTimeMs();
 

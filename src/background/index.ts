@@ -786,25 +786,6 @@ async function injectPageScriptForUrl(
     }
   }
 
-  // fmovies injection - bypasses CSP by using MAIN world
-  // Only inject into main frame (frameId: 0) to avoid XHR intercepts in iframes
-  if (/fmovies\.[a-z]+|fmovie\.[a-z]+/i.test(url)) {
-    try {
-      await browser.scripting.executeScript({
-        target: { tabId, frameIds: [0] },
-        files: ["page-scripts/fmovies-injected.js"],
-        world: "MAIN" as any,
-      });
-      injectedTabs.add(tabId);
-      log(`Injected fmovies script into tab ${tabId} (main frame only)`);
-      return true;
-    } catch (err) {
-      error(`Failed to inject fmovies script:`, err);
-      injectedTabs.delete(tabId);
-      return false;
-    }
-  }
-
   // LookMovie injection - bypasses CSP by using MAIN world
   // Only inject into main frame (frameId: 0) to avoid XHR intercepts in iframes like reCaptcha
   if (/lookmovie\d*\.to|lookmovie\.[a-z]+|lookmovie\d*\.[a-z]+/i.test(url)) {

@@ -23,7 +23,11 @@ The extension can automatically detect and extract subtitles from:
 - **YouTube** (auto-generated and uploaded captions)
 - **Jellyfin** (local and remote instances, HLS streams, native and embedded subtitles)
 - **LookMovie**
-- **FMovies**
+- **CineLite** (cinelite.xyz)
+- **BingeWatch** (bingewatch.one)
+- **Cinebto / 111movies**
+- **2Embed**
+- **Fandango**
 - **PlutoTV** (partial)
 - **123Chill** (partial)
 
