@@ -82,6 +82,10 @@ let adoptedNativeTrack: TextTrack | null = null; // The track we listen to
 let autoDriftLastAttemptMs = 0; // Rate limiting (DRIFT_LIMITS.autoCaptureIntervalMs)
 let autoDriftLastVideoMs = 0; // Dedup: skip samples at ~same video position
 let autoDriftCleanup: (() => void) | null = null; // Teardown for current track listener
+let autoDriftRescanTimer: ReturnType<typeof setTimeout> | null = null; // Re-scan while player boots
+let autoDriftRescanStartMs = 0; // Wall-clock budget start for rescans (0 = idle)
+const AUTO_DRIFT_RESCAN_BUDGET_MS = 90000;
+let autoDriftModeTicker: ReturnType<typeof setInterval> | null = null; // Keeps adopted track observable
 
 // When true, a user-uploaded subtitle file is active and auto-detection should be suppressed
 let userUploadActive = false;
@@ -2196,6 +2200,42 @@ function getDriftStatus(): {
 // ==================== Automatic drift detection ====================
 
 /**
+ * Player-managed remote TextTracks (Video.js API). Sites running Video.js
+ * with overrideNative (e.g. lookmovie2) never attach them to
+ * video.textTracks, but they are real TextTracks that fire cuechange and
+ * update activeCues — auto-drift can observe them directly.
+ */
+function getPlayerTextTracks(): TextTrack[] {
+  try {
+    const pageWindow = (window as any).wrappedJSObject || window;
+    const tracks: TextTrack[] = [];
+    const collect = (list: any): void => {
+      if (!list || typeof list.length !== "number") return;
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (t && (t.kind === "subtitles" || t.kind === "captions")) tracks.push(t);
+      }
+    };
+    if (pageWindow.videoJS && typeof pageWindow.videoJS.remoteTextTracks === "function") {
+      collect(pageWindow.videoJS.remoteTextTracks());
+    }
+    const registry = pageWindow.videojs && pageWindow.videojs.players;
+    if (registry) {
+      for (const playerId in registry) {
+        const player = registry[playerId];
+        if (player && typeof player.remoteTextTracks === "function") {
+          collect(player.remoteTextTracks());
+        }
+      }
+    }
+    return tracks;
+  } catch (e) {
+    debug(`Auto drift: player track enumeration failed: ${e}`);
+    return [];
+  }
+}
+
+/**
  * Choose which native TextTrack to observe for automatic drift samples.
  * Prefers the currently showing track (the one the user sees on the site),
  * then showing > hidden > disabled kinds subtitles/captions. Returns null
@@ -2205,14 +2245,42 @@ function pickNativeTrack(video: HTMLVideoElement): TextTrack | null {
   let showing: TextTrack | null = null;
   let hidden: TextTrack | null = null;
   let disabled: TextTrack | null = null;
-  for (let i = 0; i < video.textTracks.length; i++) {
-    const t = video.textTracks[i];
-    if (!t || (t.kind !== "subtitles" && t.kind !== "captions")) continue;
-    if (adoptedNativeTrack && t === adoptedNativeTrack) return adoptedNativeTrack;
+  let adoptedSeen = false;
+  const consider = (t: TextTrack | null | undefined): void => {
+    if (!t) return;
+    if (adoptedNativeTrack && t === adoptedNativeTrack) {
+      adoptedSeen = true;
+      return;
+    }
+    if (t.kind !== "subtitles" && t.kind !== "captions") return;
     if (t.mode === "showing" && !showing) showing = t;
     else if (t.mode === "hidden" && !hidden) hidden = t;
     else if (t.mode === "disabled" && !disabled) disabled = t;
+  };
+  for (let i = 0; i < video.textTracks.length; i++) consider(video.textTracks[i]);
+  if (adoptedSeen) return adoptedNativeTrack;
+  const fromElement = showing || hidden || disabled;
+  if (fromElement) return fromElement;
+  const playerTracks = getPlayerTextTracks();
+  // Sites like lookmovie2 expose many language tracks; Video.js often leaves
+  // language empty and names tracks by label ("English", "English 1"...).
+  // Observe the one the extension actually loaded subtitles for (label with
+  // trailing variant numbers stripped, or language code) so anchors reference
+  // its timeline.
+  const currentLang = currentTrack?.language || "";
+  const normLabel = (s: string): string =>
+    s.trim().toLowerCase().replace(/\s*\d+$/, "").trim();
+  const currentLabel = currentTrack?.label ? normLabel(currentTrack.label) : "";
+  if (currentLang || currentLabel) {
+    const matched = playerTracks.find(
+      (t) =>
+        (!!currentLang && t.language === currentLang) ||
+        (!!currentLabel && !!t.label && normLabel(t.label) === currentLabel),
+    );
+    if (matched) return matched;
   }
+  for (const t of playerTracks) consider(t);
+  if (adoptedSeen) return adoptedNativeTrack;
   return showing || hidden || disabled;
 }
 
@@ -2243,7 +2311,21 @@ function setupAutoDriftWatch(): void {
   const video = videoElement;
   const track = pickNativeTrack(video);
   if (!track) {
-    debug("Auto drift: no native subtitle track to observe");
+    debug(
+      "Auto drift: no native or player subtitle track to observe " +
+        `(native=${video.textTracks.length}, player=${getPlayerTextTracks().length})`,
+    );
+    const now = Date.now();
+    if (autoDriftRescanStartMs === 0) autoDriftRescanStartMs = now;
+    if (now - autoDriftRescanStartMs < AUTO_DRIFT_RESCAN_BUDGET_MS) {
+      if (autoDriftRescanTimer) clearTimeout(autoDriftRescanTimer);
+      autoDriftRescanTimer = setTimeout(() => {
+        autoDriftRescanTimer = null;
+        if (autoDriftEnabled && !adoptedNativeTrack && !userUploadActive) {
+          setupAutoDriftWatch();
+        }
+      }, 5000);
+    }
     return;
   }
 
@@ -2263,15 +2345,16 @@ function setupAutoDriftWatch(): void {
     return first ?? null;
   };
 
-  const onCueChange = (): void => {
+  // Shared capture path: both the cuechange listener (real native tracks) and
+  // the poller below (Video.js overrideNative emulated tracks, whose
+  // cuechange/activeCues pipeline may never run — e.g. lookmovie2) anchor
+  // through this one function.
+  const captureAutoDriftSample = (nativeText: string, videoMs: number): void => {
     if (!autoDriftEnabled || userUploadActive || cues.length === 0 || baseCues.length === 0) return;
     if (!videoElement || videoElement.paused) return;
     if (!driftEnabled) return;
+    if (nativeText.trim().length < 8) return;
 
-    const nativeCue = nativeActiveCue();
-    if (!nativeCue || !nativeCue.text || nativeCue.text.trim().length < 8) return;
-
-    const videoMs = Math.round(video.currentTime * 1000);
     // Dedup: same native cue re-firing or a seek landing back in it
     if (Math.abs(videoMs - autoDriftLastVideoMs) < 1000) return;
 
@@ -2285,7 +2368,7 @@ function setupAutoDriftWatch(): void {
     const candidates = baseCues.filter(
       (c) => c.startMs >= mappedMs - SEARCH_MS && c.startMs <= mappedMs + SEARCH_MS,
     );
-    const match = findBestCueMatch(candidates, nativeCue.text);
+    const match = findBestCueMatch(candidates, nativeText);
     if (!match) return;
 
     autoDriftLastVideoMs = videoMs;
@@ -2323,15 +2406,83 @@ function setupAutoDriftWatch(): void {
     saveDriftRecord();
   };
 
+  const onCueChange = (): void => {
+    const nativeCue = nativeActiveCue();
+    if (!nativeCue || !nativeCue.text) return;
+    captureAutoDriftSample(nativeCue.text, Math.round(video.currentTime * 1000));
+  };
+
   track.addEventListener("cuechange", onCueChange);
   adoptedNativeTrack = track;
+  autoDriftRescanStartMs = 0;
+  if (autoDriftRescanTimer) {
+    clearTimeout(autoDriftRescanTimer);
+    autoDriftRescanTimer = null;
+  }
   debug(
     `Auto drift: observing native track "${track.label || track.language || track.kind}"`,
   );
 
+  let cuePollTimer: ReturnType<typeof setInterval> | null = null;
   autoDriftCleanup = () => {
     track.removeEventListener("cuechange", onCueChange);
+    if (autoDriftModeTicker) {
+      clearInterval(autoDriftModeTicker);
+      autoDriftModeTicker = null;
+    }
+    if (cuePollTimer) {
+      clearInterval(cuePollTimer);
+      cuePollTimer = null;
+    }
   };
+
+  // Video.js (overrideNative) and site scripts flip track modes after boot;
+  // a disabled adopted track stops firing cuechange, so keep restoring it.
+  if (autoDriftModeTicker) clearInterval(autoDriftModeTicker);
+  autoDriftModeTicker = setInterval(() => {
+    if (!adoptedNativeTrack || !autoDriftEnabled || userUploadActive) return;
+    if (adoptedNativeTrack.mode === "disabled") {
+      adoptedNativeTrack.mode = "hidden";
+    }
+  }, 2000);
+
+  // Video.js overrideNative emulation keeps track.cues fully loaded even
+  // when its cuechange/activeCues pipeline never runs (lookmovie2: 1488
+  // cues, zero events in 12s). Poll the active cue by timestamp so auto
+  // drift does not depend on the site's player wiring it up. Capture on
+  // cue transitions only (like cuechange would): a mid-cue poll would
+  // pair videoMs with the cue's startMs and bias every anchor by the
+  // depth into the cue where polling happened.
+  let lastPolledCue: VTTCue | null = null;
+  cuePollTimer = setInterval(() => {
+    if (!autoDriftEnabled || !driftEnabled || userUploadActive) return;
+    if (!videoElement || videoElement.paused) return;
+    const cueList = track.cues;
+    if (!cueList || cueList.length === 0) return;
+    const videoMs = Math.round(video.currentTime * 1000);
+    let lo = 0;
+    let hi = cueList.length - 1;
+    let idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const c = cueList[mid] as VTTCue | undefined;
+      if (c && c.startTime * 1000 <= videoMs) {
+        idx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (idx < 0) return;
+    const cue = cueList[idx] as VTTCue | undefined;
+    if (!cue || cue.endTime * 1000 <= videoMs || !cue.text) {
+      lastPolledCue = null;
+      return;
+    }
+    if (cue === lastPolledCue) return;
+    lastPolledCue = cue;
+    captureAutoDriftSample(cue.text, videoMs);
+  }, 500);
 }
 
 /** Tear down the current native-track listener */
@@ -2339,6 +2490,10 @@ function teardownAutoDriftWatch(): void {
   if (autoDriftCleanup) {
     autoDriftCleanup();
     autoDriftCleanup = null;
+  }
+  if (autoDriftRescanTimer) {
+    clearTimeout(autoDriftRescanTimer);
+    autoDriftRescanTimer = null;
   }
   adoptedNativeTrack = null;
 }
