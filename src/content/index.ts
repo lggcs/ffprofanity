@@ -106,6 +106,133 @@ let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
 // Track URLs that have been processed via intercepted content (avoid double-fetch)
 const processedContentUrls = new Set<string>();
 
+// SPA players (YouTube playlists/radio mix) swap videos inside one document.
+// Subtitle URLs from these sites are stamped with the video they serve, so a
+// track whose stamp differs from the currently playing video belongs to a
+// stale extraction or a late response from the previous video.
+function currentVideoId(): string | null {
+  try {
+    return new URLSearchParams(window.location.search).get("v");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a subtitle URL is stamped with a different video Id than the one
+ * currently playing. URLs without a ?v= parameter (non-YouTube sites, or a
+ * page without ?v=) are always considered current.
+ */
+function isForeignVideoTrackUrl(rawUrl: string | null | undefined): boolean {
+  if (!rawUrl) return false;
+  const currentVid = currentVideoId();
+  if (!currentVid) return false;
+  try {
+    const vid = new URL(rawUrl, window.location.origin).searchParams.get("v");
+    return vid !== null && vid !== currentVid;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drop every auto-detected subtitle state that belongs to a video that is no
+ * longer playing. SPA players (YouTube playlists) swap videos inside one
+ * document without re-running the content script, so cues, drift state and
+ * monitoring would otherwise bleed from the previous video into the new one.
+ * User-uploaded subtitles are explicit intent and are kept across videos.
+ */
+async function resetSessionForVideoChange(): Promise<void> {
+  // A user upload deliberately outlives video changes — keep it untouched.
+  const keepUpload = await storage.getUserUploadActive();
+  if (keepUpload) {
+    log("Video change: user upload active, keeping cues and upload state");
+    return;
+  }
+
+  log(
+    `Video change: resetting session state (cues=${cues.length}, tracks=${detectedTracks.length})`,
+  );
+
+  stopMonitoring();
+
+  cues = [];
+  baseCues = [];
+  cueIndex.build(cues);
+
+  previousFirstCueMs = null;
+  currentProfanityCue = null;
+  currentProfanityWindow = null;
+  if (isMuted) {
+    if (videoElement) videoElement.muted = false;
+    isMuted = false;
+    try {
+      browser.runtime.sendMessage({ type: "unmuteNow" });
+    } catch {
+      warn("Failed to unmute on video change");
+    }
+  }
+
+  driftCorrector = new DriftCorrector();
+  driftMovieKey = null;
+  teardownAutoDriftWatch();
+  autoDriftLastVideoMs = 0;
+  autoDriftLastAttemptMs = 0;
+
+  detectedTracks = [];
+  currentTrack = null;
+  processedContentUrls.clear();
+  textTracksCues.length = 0;
+
+  if (overlayContainer) {
+    const cueEl = overlayContainer.querySelector<HTMLElement>(".ffprofanity-cue");
+    if (cueEl) {
+      cueEl.textContent = "";
+      cueEl.style.display = "none";
+    }
+    overlayContainer.classList.add("ffprofanity-hidden");
+  }
+
+  // Fresh extraction for the new video: re-scan this document and let the
+  // background hand over anything it saw during the transition.
+  void scanForTracks().catch(() => {});
+  try {
+    const response = await browser.runtime.sendMessage({ type: "getDetectedTracks" });
+    if (response?.tracks?.length > 0) {
+      addDetectedTracks(response.tracks);
+    }
+  } catch {
+    // Background not ready — auto-detection still runs via message handlers.
+  }
+}
+
+/**
+ * SPA players rewrite the URL via history.pushState when the video changes.
+ * yt-navigate-finish confirms the new video reached the player; URL polling
+ * catches any transition the events miss. The video Id is compared against
+ * the last one reset — YouTube also fires finish on the initial page load,
+ * which must not wipe freshly detected tracks for the same video.
+ */
+function setupSpaVideoChangeReset(): void {
+  let lastVideoId = currentVideoId();
+
+  const resetIfVideoChanged = (why: string) => {
+    const nowVid = currentVideoId();
+    // Without a video Id in the URL there is nothing to compare and nothing
+    // we could call a video change (e.g. YouTube browse pages, other sites).
+    if (!nowVid && !lastVideoId) return;
+    if (nowVid && nowVid === lastVideoId) return;
+    log(`Video change via ${why}: resetting session state`);
+    lastVideoId = nowVid;
+    void resetSessionForVideoChange();
+  };
+
+  const debounced = debounce(() => resetIfVideoChanged("yt-navigate-finish"), 120);
+  document.addEventListener("yt-navigate-finish", () => debounced(), true);
+  window.addEventListener("popstate", () => debounced());
+  setInterval(() => resetIfVideoChanged("url poll"), 3000);
+}
+
 // Accumulate textTracks cues from HLS.js (these have correct timing)
 interface TextTracksCue {
   type: string;
@@ -239,6 +366,10 @@ async function init(): Promise<void> {
 
   // Start the textTracks processor (for PlutoTV HLS.js timed cues)
   startTextTracksProcessor();
+
+  // SPA players (YouTube playlists) swap videos inside one document — reset
+  // per-video subtitle state when the player moves to the next video.
+  setupSpaVideoChangeReset();
 
   // Try to restore user-uploaded subtitles from a previous session/navigation.
   // This handles the case where the content script is re-injected (e.g., SPA navigation)
@@ -577,6 +708,17 @@ function handleInterceptedMessage(event: MessageEvent): void {
     const { content, language, isAsr, videoId, url } = data as {
       content: string; language: string; isAsr?: boolean; videoId?: string; url?: string;
     };
+
+    // SPA players: a timedtext response that resolved after the player moved
+    // on carries the previous video's timeline — applying it would desync the
+    // new video's overlay from the very first cue.
+    if (isForeignVideoTrackUrl(url)) {
+      log(
+        `Dropping captured timedtext for foreign video (url video=${url?.slice(0, 90)}…)`,
+      );
+      return;
+    }
+
     log(
       `Captured timedtext content: ${content?.length || 0} bytes for ${language} (video: ${videoId})`,
     );
@@ -625,6 +767,13 @@ function handleInterceptedMessage(event: MessageEvent): void {
       content: string; language: string; label: string; source: string;
       segmentLoadTime?: number; streamType?: string; url?: string;
     };
+
+    // SPA players: content fetched for the previous video can resolve after
+    // the player moved on — applying it would desync the new video.
+    if (isForeignVideoTrackUrl(url)) {
+      log(`Dropping subtitle content for foreign video from ${source}`);
+      return;
+    }
 
     // PlutoTV: Skip network-intercepted VTT content (wrong timing)
     // We use textTracks cues instead (correct timing from HLS.js)
@@ -1334,6 +1483,22 @@ async function scanForTracks(): Promise<void> {
  * @param forceSelection - If true, switch to the new track even if one is already loaded
  */
 function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): void {
+  // SPA players (YouTube playlists): a track whose URL is stamped with a
+  // different video Id than the one playing belongs to a stale extraction —
+  // selecting it would pair the new video with the previous video's timeline.
+  const foreign = tracks.filter((t) => isForeignVideoTrackUrl(t.url));
+  if (foreign.length > 0) {
+    log(
+      `Dropping ${foreign.length} track(s) for foreign video (labels: ${foreign
+        .map((t) => t.label || t.language)
+        .join(", ")})`,
+    );
+    tracks = tracks.filter((t) => !isForeignVideoTrackUrl(t.url));
+    if (tracks.length === 0) {
+      return;
+    }
+  }
+
   // Filter out duplicates
   const newTracks = tracks.filter(
     (track) =>

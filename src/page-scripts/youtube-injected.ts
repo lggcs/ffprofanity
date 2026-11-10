@@ -33,6 +33,30 @@ export function youTubePageScript(): void {
   const capturedTimedtext: Map<string, string> = new Map();
 
   /**
+   * Video Id the player is actually showing right now. YouTube rewrites the
+   * URL on playlist transitions, so ?v= in location.search is authoritative;
+   * falls back to the player API and the (possibly stale) document response.
+   */
+  function getCurrentVideoId(): string | null {
+    const urlVid = new URLSearchParams(window.location.search).get("v");
+    if (urlVid) return urlVid;
+    try {
+      const player = (document.getElementById("movie_player") as any) || null;
+      const data = player?.getVideoData?.();
+      if (data?.video_id) return data.video_id;
+    } catch {
+      // Player API not ready
+    }
+    try {
+      const ypr = (window as any).ytInitialPlayerResponse;
+      if (ypr?.videoId) return ypr.videoId;
+    } catch {
+      // Not available
+    }
+    return null;
+  }
+
+  /**
    * Emit captured subtitle content to content script
    */
   function emitSubtitleContent(url: string, content: string): void {
@@ -43,6 +67,14 @@ export function youTubePageScript(): void {
       const lang = params.get("lang") || "unknown";
       const kind = params.get("kind") || "";
       const isAsr = kind === "asr";
+
+      // A timedtext response can resolve after a playlist transition moved
+      // the player to another video; forwarding it would desync the new video.
+      const currentVid = getCurrentVideoId();
+      if (videoId && currentVid && videoId !== currentVid) {
+        log("Dropping captured timedtext for previous video:", videoId);
+        return;
+      }
 
       log("Emitting captured subtitle:", videoId, lang, "isAsr:", isAsr, "bytes:", content.length);
 
@@ -169,6 +201,7 @@ export function youTubePageScript(): void {
           source: EXTRACTOR_ID,
           language,
           label,
+          url,
           content: cached,
         },
         "*",
@@ -210,6 +243,7 @@ export function youTubePageScript(): void {
             source: EXTRACTOR_ID,
             language,
             label,
+            url,
             content: text,
           },
           "*",
@@ -266,9 +300,28 @@ export function youTubePageScript(): void {
 
   function extractFromInitialPlayerResponse(): void {
     try {
-      const ypr = (window as any).ytInitialPlayerResponse;
+      // Prefer the player's live response: on playlist transitions YouTube
+      // swaps videos without replacing the document-level one, so
+      // window.ytInitialPlayerResponse can still hold the previous video's
+      // caption tracks long after the player has moved on.
+      let ypr: any = null;
+      try {
+        ypr = ((document.getElementById("movie_player") as any) || null)?.getPlayerResponse?.() || null;
+      } catch {
+        ypr = null;
+      }
+      if (!ypr || !ypr.captions) {
+        ypr = (window as any).ytInitialPlayerResponse;
+      }
       if (!ypr) {
         log("No ytInitialPlayerResponse found");
+        return;
+      }
+
+      const currentVid = getCurrentVideoId();
+      const responseVid = ypr.videoId || null;
+      if (currentVid && responseVid && responseVid !== currentVid) {
+        log("Skipping stale player response for", responseVid, "(playing:", currentVid + ")");
         return;
       }
 
@@ -296,7 +349,33 @@ export function youTubePageScript(): void {
             isAsr,
           };
         })
-        .filter((s: any) => s.url);
+        .filter((s: any) => s.url)
+        // Belt and braces: a response can list tracks of a dead video on
+        // mixed sources; never forward a track stamped with another video.
+        .filter((s: any) => {
+          try {
+            const stamp = new URL(s.url).searchParams.get("v");
+            return !stamp || !currentVid || stamp === currentVid;
+          } catch {
+            return true;
+          }
+        });
+
+      // Stamp each track URL with the video Id it belongs to; the content
+      // script drops late arrivals whose stamp no longer matches the player.
+      if (currentVid) {
+        for (const s of subtitles) {
+          try {
+            const u = new URL(s.url);
+            if (!u.searchParams.get("v")) {
+              u.searchParams.set("v", currentVid);
+              s.url = u.toString();
+            }
+          } catch {
+            // Keep original URL if parsing fails
+          }
+        }
+      }
 
       sendSubtitleTracks(subtitles);
     } catch (e) {
@@ -336,6 +415,22 @@ export function youTubePageScript(): void {
     }
 
     window.addEventListener("popstate", checkForNavigation);
+
+    // In-player transitions (playlist autoplay) may bypass the wrapped
+    // pushState/replaceState when YouTube's own code captured the originals
+    // before this script ran — watch yt-navigate and poll the URL so the
+    // swap is still noticed. yt-navigate-start also drops cached timedtext
+    // so a just-finished fetch of the old video cannot be served from cache.
+    document.addEventListener(
+      "yt-navigate-start",
+      () => {
+        sentSubtitleUrls.clear();
+        capturedTimedtext.clear();
+      },
+      true,
+    );
+    document.addEventListener("yt-navigate-finish", checkForNavigation, true);
+    setInterval(checkForNavigation, 2000);
   }
 
   function setupResponseWatcher(): void {
