@@ -190,7 +190,7 @@ export class PlutoTVExtractor extends BaseExtractor {
             log('Got HLS manifest:', manifestText.length, 'bytes');
 
             // Parse the manifest to find VTT segment URLs
-            const lines = manifestText.split('\n');
+            const lines = manifestText.split('\\n');
             const vttUrls = [];
 
             for (let i = 0; i < lines.length; i++) {
@@ -238,7 +238,7 @@ export class PlutoTVExtractor extends BaseExtractor {
 
                 // Combine VTT content, avoiding duplicates
                 // Extract just the cues (skip WEBVTT header)
-                const cueLines = vttText.split('\n');
+                const cueLines = vttText.split('\\n');
                 let inCue = false;
                 let currentCue = '';
 
@@ -251,14 +251,14 @@ export class PlutoTVExtractor extends BaseExtractor {
                   // Detect cue timing lines (e.g., "00:00:01.000 --> 00:00:04.000")
                   if (line.includes('-->')) {
                     inCue = true;
-                    currentCue = line + '\n';
+                    currentCue = line + '\\n';
                   } else if (inCue && line.trim().length > 0) {
-                    currentCue += line + '\n';
+                    currentCue += line + '\\n';
                   } else if (inCue && line.trim().length === 0) {
                     // End of cue
                     if (!seenCues.has(currentCue)) {
                       seenCues.add(currentCue);
-                      combinedContent += currentCue + '\n';
+                      combinedContent += currentCue + '\\n';
                     }
                     inCue = false;
                     currentCue = '';
@@ -275,7 +275,7 @@ export class PlutoTVExtractor extends BaseExtractor {
             }
 
             // Prepend WEBVTT header
-            const fullContent = 'WEBVTT\n\n' + combinedContent;
+            const fullContent = 'WEBVTT\\n\\n' + combinedContent;
             log('Combined', combinedContent.length, 'bytes of VTT content');
 
             // Send content to content script
@@ -531,9 +531,6 @@ export class PlutoTVExtractor extends BaseExtractor {
                   const subs = findSubtitlesRecursive(data);
                   if (subs.length > 0) {
                     sendSubtitles(subs, 'plutotv.fetch-api');
-                  }
-                }).catch(() => {});
-              }
                   }
                 }).catch(() => {});
               }

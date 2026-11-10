@@ -600,7 +600,7 @@ function injectApiInterceptor(): void {
           '.subtitle-button:not([aria-label*="play"]):not([aria-label*="pause"])',
           '.caption-button:not([aria-label*="play"]):not([aria-label*="pause"])'
         ];
-        const target = e.target as HTMLElement;
+        const target = e.target;
         for (const sel of ccSelectors) {
           if (target.matches && (target.matches(sel) || target.closest?.(sel))) {
             console.log('[FFProfanity] CC button clicked');

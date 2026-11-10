@@ -34,6 +34,9 @@ npm exec -- esbuild src/background/index.ts --bundle --outfile=dist/background.j
 echo "Bundling content script..."
 npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
+echo "Checking composed inline scripts..."
+node scripts/check-composed-scripts.mjs
+
 echo "Bundling options script..."
 npm exec -- esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
