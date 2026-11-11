@@ -40,6 +40,9 @@ let displayPreviewContainer: HTMLDivElement;
 let previewSubtitle: HTMLDivElement;
 let previewUpcoming: HTMLDivElement;
 let autoDriftCheckbox: HTMLInputElement;
+let preferredLanguageSelect: HTMLSelectElement;
+let preferSDHCheckbox: HTMLInputElement;
+let autoSelectTrackCheckbox: HTMLInputElement;
 
 // Current cues
 let cueCount = 0;
@@ -81,6 +84,9 @@ async function init(): Promise<void> {
   previewSubtitle = document.getElementById('previewSubtitle') as HTMLDivElement;
   previewUpcoming = document.getElementById('previewUpcoming') as HTMLDivElement;
   autoDriftCheckbox = document.getElementById('autoDriftCorrection') as HTMLInputElement;
+  preferredLanguageSelect = document.getElementById('preferredLanguage') as HTMLSelectElement;
+  preferSDHCheckbox = document.getElementById('preferSDH') as HTMLInputElement;
+  autoSelectTrackCheckbox = document.getElementById('autoSelectTrack') as HTMLInputElement;
 
   // Load current settings
   await loadSettings();
@@ -92,6 +98,9 @@ async function init(): Promise<void> {
   resetWordlistBtn.addEventListener('click', handleResetWordlist);
   sensitivitySelect.addEventListener('change', () => autoSaveSettings());
   autoDriftCheckbox.addEventListener('change', () => autoSaveSettings());
+  preferredLanguageSelect.addEventListener('change', () => autoSaveSettings());
+  preferSDHCheckbox.addEventListener('change', () => autoSaveSettings());
+  autoSelectTrackCheckbox.addEventListener('change', () => autoSaveSettings());
   document.getElementById('save')?.addEventListener('click', saveAllSettings);
   document.getElementById('reset')?.addEventListener('click', resetSettings);
 
@@ -122,6 +131,30 @@ async function init(): Promise<void> {
   if (importBtn && importInput) {
     importBtn.addEventListener('click', () => importInput.click());
   }
+
+  // Footer version follows the manifest instead of a hard-coded string
+  const versionEl = document.getElementById('extVersion');
+  if (versionEl) {
+    try {
+      versionEl.textContent = `Profanity Filter v${browser.runtime.getManifest().version}`;
+    } catch {
+      // Manifest unavailable — leave the static label
+    }
+  }
+
+  // Keep the options page in step with settings written elsewhere (the
+  // popup, Alt+←/→ on the video page, auto-sync takeover): re-render
+  // from storage, debounced so bursts render once.
+  let storageRenderQueued = false;
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.settings) return;
+    if (storageRenderQueued) return;
+    storageRenderQueued = true;
+    setTimeout(() => {
+      storageRenderQueued = false;
+      void loadSettings();
+    }, 300);
+  });
 }
 
 async function loadSettings(): Promise<void> {
@@ -163,6 +196,9 @@ async function loadSettings(): Promise<void> {
   backgroundOpacitySlider.value = String(settings.backgroundOpacity ?? 80);
   opacityValue.textContent = `${settings.backgroundOpacity ?? 80}%`;
   positionSelect.value = settings.position || 'bottom';
+  preferredLanguageSelect.value = settings.preferredLanguage || 'en';
+  preferSDHCheckbox.checked = settings.preferSDH ?? true;
+  autoSelectTrackCheckbox.checked = settings.autoSelectTrack ?? true;
 
   // Update UI visibility
   updateSubstitutionUI();
@@ -475,9 +511,10 @@ async function handleResetWordlist(): Promise<void> {
 }
 
 async function saveAllSettings(): Promise<void> {
+  const isCustomMode = useSubstitutionsCheckbox.checked && categorySelect.value === 'custom';
   // Parse custom substitutions
   const customSubstitutions: Record<string, string> = {};
-  if (useSubstitutionsCheckbox.checked && categorySelect.value === 'custom') {
+  if (isCustomMode) {
     const lines = customSubstitutionsTextarea.value.split('\n').filter(l => l.includes('='));
     for (const line of lines) {
       const [word, replacement] = line.split('=').map(s => s.trim());
@@ -487,13 +524,18 @@ async function saveAllSettings(): Promise<void> {
     }
   }
 
+  const current = await storage.getSettings();
   const settings: Partial<Settings> = {
     offsetMs: parseInt(offsetSlider.value, 10),
     sensitivity: sensitivitySelect.value as Settings['sensitivity'],
     autoDriftCorrection: autoDriftCheckbox.checked,
     useSubstitutions: useSubstitutionsCheckbox.checked,
     substitutionCategory: categorySelect.value as Settings['substitutionCategory'],
-    customSubstitutions,
+    // Only overwrite the stored list while editing custom mode; a save
+    // from any other category must not wipe it.
+    customSubstitutions: isCustomMode
+      ? customSubstitutions
+      : current.customSubstitutions,
     // Display settings
     showUpcomingCues: showUpcomingCuesCheckbox.checked,
     showProfanityOnly: showProfanityOnlyCheckbox.checked,
@@ -503,6 +545,10 @@ async function saveAllSettings(): Promise<void> {
     backgroundColor: backgroundColorInput.value,
     backgroundOpacity: parseInt(backgroundOpacitySlider.value, 10),
     position: positionSelect.value as Settings['position'],
+    // Track selection settings
+    preferredLanguage: preferredLanguageSelect.value,
+    preferSDH: preferSDHCheckbox.checked,
+    autoSelectTrack: autoSelectTrackCheckbox.checked,
   };
 
   await storage.setSettings(settings);
