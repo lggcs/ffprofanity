@@ -806,10 +806,13 @@ export class ProfanityDetector {
     // Tokenize and check each word
     const tokens = tokenize(text);
     let searchIndex = 0;
+    const lowerText = text.toLowerCase();
 
     for (const token of tokens) {
       // Find the actual position of this token in the original text
-      const tokenIndex = text.toLowerCase().indexOf(token.toLowerCase(), searchIndex);
+      // (lowerText is case-folded once; re-lowering the whole text per token
+      // made detect() O(text²) on long transcripts)
+      const tokenIndex = lowerText.indexOf(token.toLowerCase(), searchIndex);
       if (tokenIndex === -1) continue;
 
       const { match, type, confidence } = this.checkWord(token);
