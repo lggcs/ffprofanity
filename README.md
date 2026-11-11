@@ -29,7 +29,6 @@ The extension can automatically detect and extract subtitles from:
 - **2Embed**
 - **Fandango**
 - **PlutoTV** (partial)
-- **123Chill** (partial)
 
 ## Installation
 

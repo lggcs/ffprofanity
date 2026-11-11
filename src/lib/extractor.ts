@@ -413,11 +413,6 @@ const SITE_CONFIGS = [
     patterns: [/youtube\.com/i, /youtu\.be/i],
     apiEndpoints: ["/api/timedtext", "/caption/"],
   },
-  {
-    name: "123chill",
-    patterns: [/123chill\.uk/i, /123chill\.[a-z]+/i, /123movies\.uk/i],
-    apiEndpoints: [],
-  },
 ];
 
 /**

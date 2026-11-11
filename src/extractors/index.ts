@@ -6,7 +6,6 @@
 import type { SiteExtractor, DetectedSubtitle } from "./base";
 import { LookMovieExtractor } from "./lookmovie";
 import { YouTubeExtractor } from "./youtube";
-import { OneTwoThreeChillExtractor } from "./123chill";
 import { PlutoTVExtractor } from "./plutotv";
 import { JellyfinExtractor } from "./jellyfin";
 import { CinebtoExtractor } from "./cinebto";
@@ -20,7 +19,6 @@ import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/lan
 const extractors: SiteExtractor[] = [
   new LookMovieExtractor(),
   new YouTubeExtractor(),
-  new OneTwoThreeChillExtractor(),
   new PlutoTVExtractor(),
   new JellyfinExtractor(),
   new CinebtoExtractor(),
@@ -107,7 +105,6 @@ export { extractLanguageFromUrlImpl as extractLanguageFromUrl };
 export { SiteExtractor, DetectedSubtitle, BaseExtractor } from "./base";
 export { lookMovieExtractor } from "./lookmovie";
 export { youTubeExtractor } from "./youtube";
-export { oneTwoThreeChillExtractor } from "./123chill";
 export { plutotvExtractor } from "./plutotv";
 export { jellyfinExtractor } from "./jellyfin";
 export { cinebtoExtractor } from "./cinebto";

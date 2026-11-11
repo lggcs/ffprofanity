@@ -24,7 +24,7 @@
  * KNOWN SERVERS:
  * - 111movies (FastStreamClient/FluidPlayer)
  * - vidsrc (various domains)
- * - vidzee, vidrock, smashystream, etc. (handled by 123chill extractor)
+ * - vidzee, vidrock, smashystream, etc.
  *
  * MIME TYPE FILTERING:
  * SubtitlesManager.mjs must not be treated as a subtitle URL. This extractor

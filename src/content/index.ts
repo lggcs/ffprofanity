@@ -933,8 +933,6 @@ function hideNativeSubtitlesForSite(source: string): void {
   // Map hostname patterns to site identifiers
   if (hostname.includes('lookmovie')) {
     site = 'lookmovie';
-  } else if (hostname.includes('123chill')) {
-    site = '123chill';
   } else if (hostname.includes('youtube')) {
     site = 'youtube';
   } else if (
@@ -1056,7 +1054,6 @@ function hideNativeSubtitlesForSite(source: string): void {
     'lookmovie.xhr-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     'lookmovie.fetch-subtitle': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     'lookmovie.fetch-hls': ['.vjs-text-track-display', '.vjs-text-track-cue'],
-    '123chill': ['.vjs-text-track-display', '.vjs-text-track-cue'],
     // Video.js-based iframe players (VidFast, VidSrc, etc.)
     'videojs-player': [
       // Video.js native selectors
@@ -2079,8 +2076,6 @@ function parseTimeString(timeStr: string): number | null {
  * On these sites, we read the time from DOM elements instead.
  */
 const SITES_NEEDING_DISPLAY_TIME = [
-  /123movies\.[a-z]+/i,
-  /123chill\.[a-z]+/i,
   /lookmovie\.[a-z]+/i,
 ];
 
