@@ -10,6 +10,16 @@ const SUBTITLE_EXTENSIONS = [".vtt", ".srt", ".ass", ".ssa", ".sub"];
 const FONT_EXTENSIONS = [".otf", ".ttf", ".woff", ".woff2", ".eot"];
 // JavaScript module extensions that should never be treated as subtitle URLs
 const JS_MODULE_EXTENSIONS = [".mjs", ".cjs"];
+// Sprite/thumbnail VTT tracks (JW Player hover previews, storyboards) carry
+// WEBVTT payloads of image timings, not dialogue — never treat as subtitles
+const THUMBNAIL_TRACK_PATTERNS = [
+  /timeslider/i,
+  /thumbs?/i,
+  /sprite/i,
+  /preview/i,
+  /storyboard/i,
+  /\.(jpe?g|png|webp)(\?|$)/i,
+];
 
 const SUBTITLE_MIME_TYPES = [
   "text/vtt",
@@ -31,6 +41,19 @@ const STREAMING_PATTERNS = [
 ];
 
 /**
+ * Check if a URL is a sprite/thumbnail VTT track (JW hover previews,
+ * storyboards) — WEBVTT payloads of image timings, not dialogue subtitles
+ */
+export function isThumbnailSubtitleUrl(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    return THUMBNAIL_TRACK_PATTERNS.some((pattern) => pattern.test(urlObj.href));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if a URL looks like a subtitle file
  */
 export function isSubtitleUrl(url: string): boolean {
@@ -45,6 +68,12 @@ export function isSubtitleUrl(url: string): boolean {
     // Exclude JS module files even if path contains subtitle-like segments
     // e.g., /ui/subtitles/SubtitlesManager.mjs must not be detected as a subtitle
     if (JS_MODULE_EXTENSIONS.some((ext) => path.endsWith(ext))) {
+      return false;
+    }
+
+    // Exclude sprite/thumbnail VTT tracks (JW hover previews, storyboards) —
+    // they are .vtt payloads but not dialogue subtitles
+    if (isThumbnailSubtitleUrl(url)) {
       return false;
     }
 

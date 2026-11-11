@@ -30,7 +30,9 @@ import {
   scanPageForTracks,
   extractFromPageScripts,
   watchForVideoTracks,
+  isThumbnailSubtitleUrl,
 } from "../lib/extractor";
+import { getLanguageName } from "../lib/language";
 import {
   getAllMatchingExtractors,
   extractLanguageFromUrl,
@@ -821,11 +823,22 @@ function handleInterceptedMessage(event: MessageEvent): void {
     // This handles cases where XHR interception happens in iframe contexts
     if (window.self !== window.top && data.subtitles) {
       log("Forwarding subtitle detection from iframe to top frame");
+      // Resolve relative URLs against THIS frame's origin before relaying —
+      // the top frame cannot reconstruct them from its own (different) origin
+      const relayed = (data.subtitles as Array<{url?: string; label?: string; language?: string}>)
+        .map((sub) => {
+          if (!sub.url) return sub;
+          try {
+            return { ...sub, url: new URL(sub.url, window.location.href).href };
+          } catch {
+            return sub;
+          }
+        });
       try {
         window.top?.postMessage({
           type: "FFPROFANITY_SUBTITLES_DETECTED",
           source: data.source,
-          subtitles: data.subtitles
+          subtitles: relayed
         }, '*');
       } catch (e) {
         // Cross-origin restrictions may block this
@@ -855,11 +868,30 @@ function handleInterceptedMessage(event: MessageEvent): void {
   for (const sub of subtitles) {
     if (!sub.url) continue;
 
+    // Resolve relative URLs against the frame's location in the top frame —
+    // a relative path fetched from a different origin (e.g., after relaying
+    // from an iframe) would 404.
+    let resolvedUrl = sub.url;
+    try {
+      resolvedUrl = new URL(resolvedUrl, window.location.href).href;
+    } catch {
+      // Keep the original value — the fetch path will handle failures
+    }
+
+    // Sprite/thumbnail tracks (JW hover previews) are image timings,
+    // not dialogue subtitles
+    if (isThumbnailSubtitleUrl(resolvedUrl)) {
+      continue;
+    }
+
+    const language = sub.language && sub.language !== "unknown"
+      ? sub.language
+      : extractLanguageFromUrl(resolvedUrl);
     const track: SubtitleTrack = {
       id: `intercepted-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      url: sub.url,
-      label: sub.label || sub.language || "Detected",
-      language: sub.language || "",
+      url: resolvedUrl,
+      label: sub.label || getLanguageName(language),
+      language,
       isSDH: /sdh|cc|hearing|deaf/i.test(sub.label || ""),
       isDefault: false,
       embedded: false,
@@ -1733,17 +1765,42 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
 
   // If track has URL, fetch it
   if (track.url) {
-    try {
-      const content = await fetchSubtitleContent(track.url);
-      log(`Received ${content.length} bytes from subtitle URL`);
-      log(`Content preview: ${content.substring(0, 200)}...`);
-      await handleSubtitleUpload(content, track.label, track.source);
-    } catch (err) {
-      error("Failed to fetch subtitle track:", err);
-      showNotification(
-        "error",
-        `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
-      );
+    // Transient origin failures (e.g., Cloudflare 522 behind a proxy rescue)
+    // can return an empty body that parses to zero cues — retry a bounded
+    // number of times before surfacing the failure. Intermediate attempts
+    // stay silent so users only see a notification if we ultimately fail.
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const isLastAttempt = attempt === MAX_ATTEMPTS;
+      try {
+        const content = await fetchSubtitleContent(track.url);
+        log(`Received ${content.length} bytes from subtitle URL (attempt ${attempt}/${MAX_ATTEMPTS})`);
+        log(`Content preview: ${content.substring(0, 200)}...`);
+        const cueCount = await handleSubtitleUpload(
+          content,
+          track.label,
+          track.source,
+          isLastAttempt ? undefined : { silent: true },
+        );
+        if (cueCount !== null && cueCount > 0) {
+          break;
+        }
+        if (!isLastAttempt) {
+          log(`Attempt ${attempt} yielded ${cueCount ?? 0} cues — retrying...`);
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      } catch (err) {
+        if (isLastAttempt) {
+          error("Failed to fetch subtitle track:", err);
+          showNotification(
+            "error",
+            `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
+          );
+        } else {
+          warn(`Subtitle fetch attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}) — retrying...`);
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
     }
   } else if (track.embedded && videoElement) {
     // For embedded tracks, we need to read from textTracks API
@@ -3541,19 +3598,22 @@ async function handleMessage(message: unknown): Promise<unknown> {
 
 /**
  * Handle uploaded subtitle file
+ * Returns the number of cues parsed, or null when rejected (used by the
+ * fetch path to retry transient server failures that returned empty bodies)
  */
 async function handleSubtitleUpload(
   content: string,
   filename?: string,
   source?: string,
-): Promise<void> {
+  options?: { silent?: boolean },
+): Promise<number | null> {
   // When a user upload is active, reject auto-detected subtitle content.
   // This prevents detected tracks from replacing user-provided subtitles.
   const isUserUpload = !source || source === 'user-upload' || source === 'user-selection' || source === 'user';
 
   if (userUploadActive && !isUserUpload) {
     log(`handleSubtitleUpload: rejecting auto-detected content (source="${source}") because user upload is active`);
-    return;
+    return null;
   }
 
   // Hide native subtitles on streaming sites (prevents double display)
@@ -3571,14 +3631,18 @@ async function handleSubtitleUpload(
 
   if (result.errors.length > 0) {
     error("Parse errors:", result.errors);
-    showNotification("error", result.errors.join("; "));
-    return;
+    if (!options?.silent) {
+      showNotification("error", result.errors.join("; "));
+    }
+    return null;
   }
 
   if (result.cues.length === 0) {
     error("No cues found in subtitle content");
-    showNotification("error", "No subtitles found in file");
-    return;
+    if (!options?.silent) {
+      showNotification("error", "No subtitles found in file");
+    }
+    return null;
   }
 
   // For uploaded subtitle files, use cues as-is (VOD/static content)
@@ -3627,6 +3691,8 @@ async function handleSubtitleUpload(
     // Auto-detected track: currentTrack was already set by selectTrack()
     log(`Loaded auto-detected track content: ${filename || source}`);
   }
+
+  return result.cues.length;
 }
 
 /**
