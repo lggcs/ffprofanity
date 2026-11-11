@@ -113,6 +113,13 @@ const processedContentUrls = new Set<string>();
 // track whose stamp differs from the currently playing video belongs to a
 // stale extraction or a late response from the previous video.
 function currentVideoId(): string | null {
+  // TikTok feed URLs carry the id in the path (/@user/video/{id}), not a
+  // query param; feed navigation swaps videos in-document, so the SPA
+  // reset needs a per-video key there too.
+  if (/tiktok\./i.test(window.location.hostname)) {
+    const m = window.location.pathname.match(/\/video\/(\d+)/);
+    return m?.[1] ?? null;
+  }
   try {
     return new URLSearchParams(window.location.search).get("v");
   } catch {
@@ -933,6 +940,11 @@ function hideNativeSubtitlesForSite(source: string): void {
   // Map hostname patterns to site identifiers
   if (hostname.includes('lookmovie')) {
     site = 'lookmovie';
+  } else if (hostname.includes('tiktok')) {
+    // TikTok renders its own captions as an HTML overlay (no textTracks),
+    // and only when the user enables CC — still suppress so the extension's
+    // overlay isn't doubled if they do.
+    site = 'tiktok';
   } else if (hostname.includes('youtube')) {
     site = 'youtube';
   } else if (
@@ -1132,6 +1144,13 @@ function hideNativeSubtitlesForSite(source: string): void {
       '.vjs-text-track-cue',
       '[class*="subtitle"]:not([class*="ffprofanity"])',
       '[class*="caption"]:not([class*="ffprofanity"]):not([class*="icon"])',
+      'video::cue',
+    ],
+    // TikTok renders captions as an HTML overlay (no textTracks)
+    'tiktok': [
+      '[class*="WebSubtitles"]:not([class*="ffprofanity"])',
+      '[class*="caption-container"]:not([class*="ffprofanity"])',
+      '[data-e2e="video-caption"]',
       'video::cue',
     ],
   };

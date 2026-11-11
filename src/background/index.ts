@@ -882,6 +882,26 @@ async function injectPageScriptForUrl(
     }
   }
 
+  // TikTok injection - captionInfos/subtitleInfos WEBVTT relay.
+  // TikTok's CSP blocks inline scripts (no 'unsafe-inline'), so the
+  // extractor must run from a MAIN-world page-script bundle instead.
+  if (/tiktok\.[a-z.]+/i.test(url)) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        files: ["page-scripts/tiktok-injected.js"],
+        world: "MAIN" as any,
+      });
+      injectedTabs.add(tabId);
+      log(`Injected TikTok script into tab ${tabId} (main frame only)`);
+      return true;
+    } catch (err) {
+      error(`Failed to inject TikTok script:`, err);
+      injectedTabs.delete(tabId);
+      return false;
+    }
+  }
+
   return false;
 }
 

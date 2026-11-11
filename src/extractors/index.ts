@@ -13,6 +13,7 @@ import { TwoEmbedExtractor } from "./2embed";
 import { FandangoExtractor } from "./fandango";
 import { BingeWatchExtractor } from "./bingewatch";
 import { CineLiteExtractor } from "./cinelite";
+import { TikTokExtractor } from "./tiktok";
 import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
@@ -26,6 +27,7 @@ const extractors: SiteExtractor[] = [
   new FandangoExtractor(),
   new BingeWatchExtractor(),
   new CineLiteExtractor(),
+  new TikTokExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -112,3 +114,4 @@ export { twoEmbedExtractor } from "./2embed";
 export { fandangoExtractor } from "./fandango";
 export { bingewatchExtractor } from "./bingewatch";
 export { cineliteExtractor } from "./cinelite";
+export { tiktokExtractor } from "./tiktok";

@@ -29,6 +29,8 @@ The extension can automatically detect and extract subtitles from:
 - **2Embed**
 - **Fandango**
 - **PlutoTV** (partial)
+- **TikTok** (feed videos — auto-relays the WEBVTT captions TikTok keeps
+  behind its CC toggle; the extension renders its own overlay instead)
 
 ## Installation
 
