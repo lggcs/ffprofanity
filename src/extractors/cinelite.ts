@@ -39,9 +39,11 @@ export class CineLiteExtractor extends BaseExtractor {
         (responseText.trim().startsWith("{") || responseText.trim().startsWith("["))) {
       try {
         const data = JSON.parse(responseText);
-        subs.push(...findDetectedSubtitles(data).filter(
-          (s) => s.url && !/\.mjs(\?|$)/i.test(s.url),
-        ) as DetectedSubtitle[]);
+        subs.push(
+          ...this.findSubtitlesRecursive(data, 'cinelite.json').filter(
+            (s) => s.url && !/\.mjs(\?|$)/i.test(s.url),
+          ),
+        );
       } catch {
         // Not JSON
       }

@@ -365,6 +365,7 @@ export function youTubePageScript(): void {
       // script drops late arrivals whose stamp no longer matches the player.
       if (currentVid) {
         for (const s of subtitles) {
+          if (!s.url) continue;
           try {
             const u = new URL(s.url);
             if (!u.searchParams.get("v")) {
