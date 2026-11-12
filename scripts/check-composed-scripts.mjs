@@ -5,8 +5,12 @@
 // and parse-checked here before the build can succeed.
 import fs from "node:fs";
 import vm from "node:vm";
+import { fileURLToPath } from "node:url";
 
-const dist = new URL("../dist/content.js", import.meta.url);
+// The checker anchors on unminified bundle text (function/class names), which
+// `--minify` erases; template literal contents are identical either way, so
+// prod builds pass a separate dev-shaped bundle to keep the same guarantees.
+const dist = process.argv[2] ?? fileURLToPath(new URL("../dist/content.js", import.meta.url));
 const src = fs.readFileSync(dist, "utf8");
 
 function extractTemplate(startIdx) {

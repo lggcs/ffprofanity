@@ -35,7 +35,15 @@ echo "Bundling content script..."
 npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
 
 echo "Checking composed inline scripts..."
-node scripts/check-composed-scripts.mjs
+if [ "$MODE" = "prod" ] || [ "$MODE" = "package" ]; then
+    # check-composed-scripts.mjs anchors on unminified names; check a
+    # dev-shaped bundle instead of the minified one shipped in prod
+    npm exec -- esbuild src/content/index.ts --bundle --outfile=dist/content.check.js --format=iife --platform=browser --target=firefox142 --define:__DEV__=true
+    node scripts/check-composed-scripts.mjs dist/content.check.js
+    rm -f dist/content.check.js
+else
+    node scripts/check-composed-scripts.mjs
+fi
 
 echo "Bundling options script..."
 npm exec -- esbuild src/options/index.ts --bundle --outfile=dist/options.js --format=iife --platform=browser --target=firefox142 --define:$DEV_DEFINE $ESBUILD_MINIFY
