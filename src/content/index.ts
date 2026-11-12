@@ -62,6 +62,13 @@ let currentCueEl: HTMLDivElement | null = null;
 let nextCuesEl: HTMLDivElement | null = null;
 let notificationEl: HTMLDivElement | null = null;
 
+// What the overlay currently shows. The update loop runs at frame rate but the
+// active cue changes a few times a minute; re-writing the same text and
+// re-walking the upcoming-cues list every frame is pure waste on weak devices.
+let shownCueId: number | null = null;
+let shownCueText: string | null = null;
+let shownUpcomingKey: string | null = null;
+
 // Video state
 let videoElement: HTMLVideoElement | null = null;
 let isActive = false;
@@ -104,6 +111,14 @@ let lastKnownTimeTimestamp: number = 0; // When we last read a valid time (for e
 
 // Reference to time display element (for sites where video.currentTime is unreliable)
 let timeDisplayElement: HTMLElement | null = null;
+
+// Whether that element is actually on screen. Asking forces a style and layout
+// flush, so the answer is cached and re-validated a few times a second: the
+// player controls do not move on their own, while this runs at frame rate.
+const DISPLAY_TIME_VISIBILITY_CHECK_MS = 500;
+let displayTimeIsVisible = false;
+let displayTimeCheckedAt = 0;
+let displayTimeCheckedEl: HTMLElement | null = null;
 
 // Debouncing
 let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -357,6 +372,10 @@ async function resetSessionForVideoChange(): Promise<void> {
     }
     overlayContainer.classList.add("ffprofanity-hidden");
   }
+  // The overlay DOM was cleared behind updatePlayback's back.
+  shownCueId = null;
+  shownCueText = null;
+  shownUpcomingKey = null;
 
   // Fresh extraction for the new video: re-scan this document and let the
   // background hand over anything it saw during the transition.
@@ -460,7 +479,10 @@ function processTextTracksCues(): void {
 }
 
 /**
- * Start the textTracks processing interval (call once during init)
+ * Start the textTracks processing interval.
+ * Idempotent, and only started once a timed cue actually arrives: this
+ * accumulator is filled by PlutoTV's HLS.js pipeline alone, so every other
+ * site would otherwise carry a 500ms timer for the life of the tab.
  */
 function startTextTracksProcessor(): void {
   if (textTracksProcessTimer) return;
@@ -529,8 +551,8 @@ async function init(): Promise<void> {
   // Inject script to intercept API responses on streaming sites
   injectApiInterceptor();
 
-  // Start the textTracks processor (for PlutoTV HLS.js timed cues)
-  startTextTracksProcessor();
+  // The textTracks processor starts on the first timed cue (PlutoTV HLS.js) —
+  // see startTextTracksProcessor.
 
   // SPA players (YouTube playlists) swap videos inside one document — reset
   // per-video subtitle state when the player moves to the next video.
@@ -881,6 +903,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
       return;
     }
     textTracksCues.push(data);
+    startTextTracksProcessor();
     return;
   }
 
@@ -2385,16 +2408,25 @@ const SITES_NEEDING_DISPLAY_TIME = [
   /lookmovie\.[a-z]+/i,
 ];
 
+// The hostname cannot change without a full page load, and this is consulted on
+// every animation frame.
+let displayTimeTrackingNeeded: boolean | null = null;
+
 /**
  * Check if current site needs display-based time tracking
  */
 function needsDisplayTimeTracking(): boolean {
-  try {
-    const hostname = window.location.hostname;
-    return SITES_NEEDING_DISPLAY_TIME.some(pattern => pattern.test(hostname));
-  } catch {
-    return false;
+  if (displayTimeTrackingNeeded === null) {
+    try {
+      const hostname = window.location.hostname;
+      displayTimeTrackingNeeded = SITES_NEEDING_DISPLAY_TIME.some((pattern) =>
+        pattern.test(hostname),
+      );
+    } catch {
+      displayTimeTrackingNeeded = false;
+    }
   }
+  return displayTimeTrackingNeeded;
 }
 
 /**
@@ -2413,17 +2445,23 @@ function getCurrentTimeMs(): { timeMs: number; source: string } {
     }
 
     if (timeDisplayElement && timeDisplayElement.isConnected) {
-      const rect = timeDisplayElement.getBoundingClientRect();
-      const style = window.getComputedStyle(timeDisplayElement);
-      const isVisible = style.display !== 'none' &&
-                        style.visibility !== 'hidden' &&
-                        parseFloat(style.opacity) > 0 &&
-                        rect.width > 0 && rect.height > 0;
+      // Visibility costs a style recalc plus a forced layout, so re-check it
+      // only when the element changes or the cached answer goes stale.
+      if (displayTimeCheckedEl !== timeDisplayElement || now - displayTimeCheckedAt > DISPLAY_TIME_VISIBILITY_CHECK_MS) {
+        const rect = timeDisplayElement.getBoundingClientRect();
+        const style = window.getComputedStyle(timeDisplayElement);
+        displayTimeIsVisible = style.display !== 'none' &&
+                               style.visibility !== 'hidden' &&
+                               parseFloat(style.opacity) > 0 &&
+                               rect.width > 0 && rect.height > 0;
+        displayTimeCheckedAt = now;
+        displayTimeCheckedEl = timeDisplayElement;
+      }
 
       const timeStr = timeDisplayElement.textContent?.trim() || '';
       const timeMs = parseTimeString(timeStr);
 
-      if (isVisible && timeMs !== null && timeMs >= 0) {
+      if (displayTimeIsVisible && timeMs !== null && timeMs >= 0) {
         lastKnownTimeMs = timeMs;
         lastKnownTimeTimestamp = now;
         return { timeMs, source: 'display' };
@@ -4916,9 +4954,15 @@ function updatePlayback(currentTimeMs: number): void {
     const rawText = currentCue.hasProfanity
       ? currentCue.censoredText
       : currentCue.text;
-    const displayText = sanitizeText(rawText);
 
-    currentCueEl.textContent = displayText;
+    // The active cue usually spans many frames; only touch the DOM when the
+    // cue or its rendered text actually changes.
+    if (shownCueId !== currentCue.id || shownCueText !== rawText) {
+      const displayText = sanitizeText(rawText);
+      currentCueEl.textContent = displayText;
+      shownCueId = currentCue.id;
+      shownCueText = rawText;
+    }
     currentCueEl.style.display = "block";
     currentCueEl.classList.remove("ffprofanity-hidden");
 
@@ -4934,22 +4978,29 @@ function updatePlayback(currentTimeMs: number): void {
         settings.upcomingCuesCount,
         settings.offsetMs,
       );
-      if (nextCues.length > 0) {
-        nextCuesEl.replaceChildren();
-        for (const c of nextCues) {
-          const time = formatTime(c.startMs);
-          const rawText = c.hasProfanity ? c.censoredText : c.text;
-          const text = sanitizeText(rawText);
-          const preview = document.createElement("div");
-          preview.className = "ffprofanity-preview";
-          preview.textContent = `${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`;
-          nextCuesEl.appendChild(preview);
+      // The preview only changes when the upcoming set changes; rebuilding the
+      // nodes every frame allocated a div per cue at 60 Hz.
+      const upcomingKey = nextCues.map((c) => c.id).join(",");
+      if (upcomingKey !== shownUpcomingKey) {
+        shownUpcomingKey = upcomingKey;
+        if (nextCues.length > 0) {
+          nextCuesEl.replaceChildren();
+          for (const c of nextCues) {
+            const time = formatTime(c.startMs);
+            const rawPreviewText = c.hasProfanity ? c.censoredText : c.text;
+            const text = sanitizeText(rawPreviewText);
+            const preview = document.createElement("div");
+            preview.className = "ffprofanity-preview";
+            preview.textContent = `${time}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`;
+            nextCuesEl.appendChild(preview);
+          }
+        } else {
+          nextCuesEl.replaceChildren();
         }
-      } else {
-        nextCuesEl.replaceChildren();
       }
-    } else if (nextCuesEl) {
+    } else if (nextCuesEl && shownUpcomingKey !== "") {
       nextCuesEl.replaceChildren();
+      shownUpcomingKey = "";
     }
   } else {
     currentCueEl.classList.add("ffprofanity-hidden");
