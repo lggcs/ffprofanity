@@ -999,6 +999,10 @@ function hideNativeSubtitlesForSite(source: string): void {
     site = 'tiktok';
   } else if (hostname.includes('youtube')) {
     site = 'youtube';
+  } else if (hostname.includes('peertube') || source === 'peertube') {
+    // PeerTube instances (federated) render captions via the Video.js
+    // overlay when the user enables CC; suppress so our overlay wins.
+    site = 'peertube';
   } else if (
     hostname.includes('vidfast') ||
     hostname.includes('vidsrc') ||
@@ -1203,6 +1207,12 @@ function hideNativeSubtitlesForSite(source: string): void {
       '[class*="WebSubtitles"]:not([class*="ffprofanity"])',
       '[class*="caption-container"]:not([class*="ffprofanity"])',
       '[data-e2e="video-caption"]',
+      'video::cue',
+    ],
+    // PeerTube instances use Video.js-style caption overlays
+    'peertube': [
+      '.vjs-text-track-display',
+      '.vjs-text-track-cue',
       'video::cue',
     ],
   };

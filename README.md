@@ -33,6 +33,9 @@ The extension can automatically detect and extract subtitles from:
 - **PlutoTV** (partial)
 - **TikTok** (feed videos — auto-relays the WEBVTT captions TikTok keeps
   behind its CC toggle; the extension renders its own overlay instead)
+- **PeerTube** (any instance — watch and embed pages; captions come from the
+  instance's public captions API, so auto-generated and uploaded tracks both
+  work)
 
 ## Installation
 

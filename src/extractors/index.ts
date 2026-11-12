@@ -14,6 +14,7 @@ import { FandangoExtractor } from "./fandango";
 import { BingeWatchExtractor } from "./bingewatch";
 import { CineLiteExtractor } from "./cinelite";
 import { TikTokExtractor } from "./tiktok";
+import { PeertubeExtractor } from "./peertube";
 import { extractLanguageFromUrl as extractLanguageFromUrlImpl } from "../lib/language";
 
 // All available extractors
@@ -28,6 +29,7 @@ const extractors: SiteExtractor[] = [
   new BingeWatchExtractor(),
   new CineLiteExtractor(),
   new TikTokExtractor(),
+  new PeertubeExtractor(),
   // Add more extractors here as they're created
 ];
 
@@ -115,3 +117,4 @@ export { fandangoExtractor } from "./fandango";
 export { bingewatchExtractor } from "./bingewatch";
 export { cineliteExtractor } from "./cinelite";
 export { tiktokExtractor } from "./tiktok";
+export { peertubeExtractor } from "./peertube";
