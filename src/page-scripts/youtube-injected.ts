@@ -32,17 +32,91 @@ export function youTubePageScript(): void {
   const sentSubtitleUrls = new Set<string>();
   const capturedTimedtext: Map<string, string> = new Map();
 
+  // The background injects this script at onCommitted — often before the
+  // content script has attached its message listener — and its own retry
+  // dedup means a message sent into the void is never sent again. Buffer
+  // every relay until the content script signals it is listening.
+  let relayReady = false;
+  const pendingPrelude: any[] = [];
+
+  function flushPrelude(): void {
+    if (!relayReady || pendingPrelude.length === 0) return;
+    const prelude = pendingPrelude.splice(0);
+    for (const msg of prelude) window.postMessage(msg, "*");
+  }
+
+  function markRelayReady(): void {
+    if (relayReady) return;
+    try {
+      if (!document.documentElement.hasAttribute("data-ffprofanity-relay-ready")) {
+        return;
+      }
+    } catch {
+      // No document element yet — stay buffered
+    }
+    relayReady = true;
+    flushPrelude();
+  }
+
+  function relayPost(msg: Record<string, unknown>): void {
+    if (relayReady) {
+      window.postMessage(msg, "*");
+      return;
+    }
+    pendingPrelude.push(msg);
+  }
+
+  window.addEventListener("message", (e: MessageEvent) => {
+    if (e.source !== window) return;
+    if ((e.data as { type?: string } | null)?.type !== "FFPROFANITY_RELAY_READY") return;
+    markRelayReady();
+  });
+
+  // A READY posted before this script existed is gone; the DOM attribute
+  // the content script sets is the listener-independent signal.
+  const readyPoll = setInterval(markRelayReady, 250);
+  setTimeout(() => {
+    clearInterval(readyPoll);
+    if (!relayReady && pendingPrelude.length > 0) {
+      // Deliver anyway rather than lose the only copy of this data.
+      relayReady = true;
+      flushPrelude();
+    }
+  }, 15000);
+
+  /**
+   * The player element that actually carries media data. Shorts pages keep
+   * #movie_player as an empty stub and mount the real player as
+   * #shorts-player, so the stub must not win just by being queried first.
+   */
+  function getLivePlayer(): any | null {
+    const candidates: any[] = [
+      document.getElementById("movie_player"),
+      document.getElementById("shorts-player"),
+    ].filter(Boolean);
+    for (const p of candidates) {
+      try {
+        if (p?.getVideoData?.()?.video_id) return p;
+      } catch {
+        // Player API not ready for this element
+      }
+    }
+    return candidates[0] || null;
+  }
+
   /**
    * Video Id the player is actually showing right now. YouTube rewrites the
    * URL on playlist transitions, so ?v= in location.search is authoritative;
-   * falls back to the player API and the (possibly stale) document response.
+   * Shorts pages carry the Id in the path instead and expose none in the
+   * player response; falls back to the player API and the document response.
    */
   function getCurrentVideoId(): string | null {
     const urlVid = new URLSearchParams(window.location.search).get("v");
     if (urlVid) return urlVid;
+    const shortsVid = window.location.pathname.match(/\/shorts\/([\w-]+)/)?.[1];
+    if (shortsVid) return shortsVid;
     try {
-      const player = (document.getElementById("movie_player") as any) || null;
-      const data = player?.getVideoData?.();
+      const data = getLivePlayer()?.getVideoData?.();
       if (data?.video_id) return data.video_id;
     } catch {
       // Player API not ready
@@ -78,7 +152,7 @@ export function youTubePageScript(): void {
 
       log("Emitting captured subtitle:", videoId, lang, "isAsr:", isAsr, "bytes:", content.length);
 
-      window.postMessage(
+      relayPost(
         {
           type: "FFPROFANITY_SUBTITLE_CAPTURED",
           source: EXTRACTOR_ID,
@@ -88,7 +162,6 @@ export function youTubePageScript(): void {
           content,
           url,
         },
-        "*",
       );
     } catch (e) {
       log("Error emitting subtitle content:", e);
@@ -195,7 +268,7 @@ export function youTubePageScript(): void {
     const cached = capturedTimedtext.get(url);
     if (cached) {
       log("Using cached timedtext for", language);
-      window.postMessage(
+      relayPost(
         {
           type: "FFPROFANITY_SUBTITLE_CONTENT",
           source: EXTRACTOR_ID,
@@ -204,7 +277,6 @@ export function youTubePageScript(): void {
           url,
           content: cached,
         },
-        "*",
       );
       return cached;
     }
@@ -237,7 +309,7 @@ export function youTubePageScript(): void {
         log("Fetched", text.length, "bytes for", language);
         capturedTimedtext.set(url, text);
 
-        window.postMessage(
+        relayPost(
           {
             type: "FFPROFANITY_SUBTITLE_CONTENT",
             source: EXTRACTOR_ID,
@@ -246,7 +318,6 @@ export function youTubePageScript(): void {
             url,
             content: text,
           },
-          "*",
         );
         return text;
       } catch (fetchError) {
@@ -278,7 +349,7 @@ export function youTubePageScript(): void {
 
     log("Found", uniqueTracks.length, "caption tracks");
 
-    window.postMessage(
+    relayPost(
       {
         type: "FFPROFANITY_SUBTITLES_DETECTED",
         source: EXTRACTOR_ID,
@@ -289,7 +360,6 @@ export function youTubePageScript(): void {
           isAsr: t.isAsr,
         })),
       },
-      "*",
     );
 
     const englishTrack = uniqueTracks.find((t) => t.language === "en") || uniqueTracks[0];
@@ -303,10 +373,11 @@ export function youTubePageScript(): void {
       // Prefer the player's live response: on playlist transitions YouTube
       // swaps videos without replacing the document-level one, so
       // window.ytInitialPlayerResponse can still hold the previous video's
-      // caption tracks long after the player has moved on.
+      // caption tracks long after the player has moved on. Shorts pages
+      // mount the live player as #shorts-player (see getLivePlayer).
       let ypr: any = null;
       try {
-        ypr = ((document.getElementById("movie_player") as any) || null)?.getPlayerResponse?.() || null;
+        ypr = getLivePlayer()?.getPlayerResponse?.() || null;
       } catch {
         ypr = null;
       }
@@ -459,49 +530,81 @@ export function youTubePageScript(): void {
   }
 
   function tryEnableCaptions(): void {
-    const ccButton = document.querySelector(".ytp-subtitles-button") as HTMLButtonElement;
-    if (!ccButton) {
-      log("No CC button found");
-      return;
-    }
+    const ccButton = document.querySelector(".ytp-subtitles-button") as HTMLButtonElement | null;
+    const buttonUsable =
+      !!ccButton &&
+      getComputedStyle(ccButton).display !== "none" &&
+      ccButton.getClientRects().length > 0;
 
-    const isEnabled = ccButton.getAttribute("aria-pressed") === "true";
+    if (buttonUsable && ccButton) {
+      const isEnabled = ccButton.getAttribute("aria-pressed") === "true";
 
-    if (isEnabled) {
-      log("Captions already enabled, timedtext should be loading");
-      const ypr = (window as any).ytInitialPlayerResponse;
-      const captionTracks = ypr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (!captionTracks || captionTracks.length === 0) {
-        if ((window as any).__ffprofanity_caption_toggled) {
-          log("Live stream: No caption tracks available after toggle");
+      if (isEnabled) {
+        log("Captions already enabled, timedtext should be loading");
+        const ypr = (window as any).ytInitialPlayerResponse;
+        const captionTracks = ypr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (!captionTracks || captionTracks.length === 0) {
+          if ((window as any).__ffprofanity_caption_toggled) {
+            log("Live stream: No caption tracks available after toggle");
+            return;
+          }
+          log("Live stream with no tracks - toggling captions to trigger timedtext");
+          (window as any).__ffprofanity_caption_toggled = true;
+          ccButton.click();
+          setTimeout(() => {
+            ccButton.click();
+            setTimeout(() => extractFromInitialPlayerResponse(), 500);
+          }, 100);
           return;
         }
-        log("Live stream with no tracks - toggling captions to trigger timedtext");
-        (window as any).__ffprofanity_caption_toggled = true;
-        ccButton.click();
-        setTimeout(() => {
-          ccButton.click();
-          setTimeout(() => extractFromInitialPlayerResponse(), 500);
-        }, 100);
         return;
       }
+
+      if ((window as any).__ffprofanity_caption_triggered) {
+        log("Already tried enabling captions");
+        return;
+      }
+      (window as any).__ffprofanity_caption_triggered = true;
+
+      log("Clicking CC button to trigger caption loading");
+      ccButton.click();
+
+      setTimeout(() => {
+        const tracks = document.querySelectorAll("track");
+        log("After CC click, found", tracks.length, "track elements");
+        extractFromInitialPlayerResponse();
+      }, 1000);
       return;
     }
 
+    // Shorts keeps the CC button display:none — aria-pressed stays false and
+    // a click on it does nothing, so drive the player's captions module
+    // directly to make the player fetch timedtext for our interception.
     if ((window as any).__ffprofanity_caption_triggered) {
       log("Already tried enabling captions");
       return;
     }
+    const player = getLivePlayer();
+    // #movie_player is a stub until Shorts mounts the real player; one
+    // attempt must not be wasted toggling it, so retry until the API is wired.
+    if (!player?.getVideoData?.()?.video_id) {
+      const attempts = (window as any).__ffprofanity_caption_attempts || 0;
+      if (attempts >= 20) return;
+      (window as any).__ffprofanity_caption_attempts = attempts + 1;
+      log("Player API not ready for caption toggle, retrying");
+      setTimeout(tryEnableCaptions, 1000);
+      return;
+    }
     (window as any).__ffprofanity_caption_triggered = true;
 
-    log("Clicking CC button to trigger caption loading");
-    ccButton.click();
-
-    setTimeout(() => {
-      const tracks = document.querySelectorAll("track");
-      log("After CC click, found", tracks.length, "track elements");
-      extractFromInitialPlayerResponse();
-    }, 1000);
+    log("CC button hidden or absent — enabling captions via player API");
+    try {
+      player.loadModule("captions");
+      player.toggleSubtitles();
+    } catch (e) {
+      log("Player API caption toggle failed:", e);
+    }
+    setTimeout(() => extractFromInitialPlayerResponse(), 1000);
   }
 
   function init(): void {

@@ -120,6 +120,12 @@ function currentVideoId(): string | null {
     const m = window.location.pathname.match(/\/video\/(\d+)/);
     return m?.[1] ?? null;
   }
+  // Shorts carry the video Id in the path and have no ?v= param; feed-style
+  // navigation swaps Shorts in-document, so the SPA reset needs the Id too.
+  if (/youtube\./i.test(window.location.hostname)) {
+    const m = window.location.pathname.match(/\/shorts\/([\w-]+)/);
+    if (m?.[1]) return m[1];
+  }
   try {
     return new URLSearchParams(window.location.search).get("v");
   } catch {
@@ -142,6 +148,16 @@ function isForeignVideoTrackUrl(rawUrl: string | null | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * A video mounted inside YouTube's Shorts player. Shorts pages carry a
+ * hidden #movie_player stub video (duration NaN, readyState 0) alongside the
+ * real one in #shorts-player, which defeats the duration-based ad filter.
+ */
+function isShortsPlayerVideo(v: HTMLVideoElement): boolean {
+  if (!/youtube\./i.test(window.location.hostname)) return false;
+  return v.closest("#shorts-player") !== null;
 }
 
 /**
@@ -630,6 +646,42 @@ function injectApiInterceptor(): void {
   fallbackScript.remove();
 
   window.addEventListener("message", handleInterceptedMessage);
+
+  // Page scripts are injected at onCommitted and may have relayed before
+  // this listener existed; tell the page script its relays will arrive.
+  // The attribute is the listener-independent signal — a READY posted before
+  // the page script existed would otherwise never reach its listener.
+  window.postMessage({ type: "FFPROFANITY_RELAY_READY" }, "*");
+  try {
+    document.documentElement?.setAttribute("data-ffprofanity-relay-ready", "1");
+  } catch {
+    // Document element not ready yet
+  }
+}
+
+/**
+ * Intercepted relays that arrived before this frame found its video element.
+ * The top frame would otherwise drop them for good — page scripts dedupe
+ * their own retries, so those messages can never be sent again. Timed
+ * FFPROFANITY_SUBTITLE_CUE events are never deferred: delaying them would
+ * misalign the cue timeline.
+ */
+const deferredSubtitleMsgs: any[] = [];
+
+function deferUntilVideoElement(data: Record<string, unknown>): void {
+  if (window.self !== window.top) return;
+  if (deferredSubtitleMsgs.length >= 20) deferredSubtitleMsgs.shift();
+  deferredSubtitleMsgs.push(data);
+  log("No video element yet — deferring intercepted message until video is found");
+}
+
+function flushDeferredSubtitleMessages(): void {
+  if (!videoElement || deferredSubtitleMsgs.length === 0) return;
+  const buffered = deferredSubtitleMsgs.splice(0);
+  log(`Video element ready — replaying ${buffered.length} deferred intercepted message(s)`);
+  for (const data of buffered) {
+    handleInterceptedMessage({ source: window, data } as unknown as MessageEvent);
+  }
 }
 
 /**
@@ -711,7 +763,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
           log("Could not forward captured subtitle (cross-origin blocked)");
         }
       }
-      log("Skipping captured subtitle - no video element in this frame");
+      deferUntilVideoElement(data);
       return;
     }
     const { content, language, isAsr, videoId, url } = data as {
@@ -769,7 +821,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
           log("Could not forward content to top frame (cross-origin blocked)");
         }
       }
-      log("Skipping subtitle content - no video element in this frame");
+      deferUntilVideoElement(data);
       return;
     }
     const { content, language, label, source, segmentLoadTime, streamType, url } = data as {
@@ -852,7 +904,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
         log("Could not forward to top frame (cross-origin blocked)");
       }
     }
-    log("Skipping subtitle detection - no video element in this frame");
+    deferUntilVideoElement(data);
     return;
   }
 
@@ -2029,6 +2081,10 @@ function attachVideoListeners(video: HTMLVideoElement): void {
   // adopt one now and again shortly after (track list is stable by then).
   setupAutoDriftWatch();
   setTimeout(() => setupAutoDriftWatch(), 5000);
+
+  // A video element is now available — replay intercepted relays that
+  // arrived before the player mounted (Shorts mounts its player late).
+  flushDeferredSubtitleMessages();
 }
 
 /**
@@ -4239,7 +4295,13 @@ function startMonitoring(): void {
   // On YouTube, multiple video elements may exist - try to find the main content video
   if (isAdVideo) {
     const allVideos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
-    const validVideos = allVideos.filter(v =>
+    // Shorts keeps a hidden #movie_player stub video (duration NaN) next to
+    // the real one in #shorts-player, and a Short can itself be under the
+    // 30s ad threshold — the Shorts player video is the content video.
+    const shortsVideo = allVideos.find(
+      (v) => v.isConnected && isShortsPlayerVideo(v) && v.duration > 0 && !isNaN(v.duration) && v.readyState >= 1,
+    );
+    const validVideos = shortsVideo ? [shortsVideo] : allVideos.filter(v =>
       v.isConnected && v.duration > 30 && !isNaN(v.duration) && v.readyState >= 1
     );
 
@@ -4301,8 +4363,14 @@ function startMonitoring(): void {
       // Current video is invalid, try to find a valid content video
       const allVideos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
 
+      // Shorts keeps a hidden #movie_player stub video (duration NaN) next
+      // to the real one in #shorts-player; it must never win the re-pick.
+      const shortsVideo = allVideos.find(
+        (v) => v.isConnected && isShortsPlayerVideo(v) && v.duration > 0 && !isNaN(v.duration) && v.readyState >= 1,
+      );
+
       // Filter for valid content videos: connected, valid duration, proper readyState
-      const validVideos = allVideos.filter(v => {
+      const validVideos = shortsVideo ? [shortsVideo] : allVideos.filter(v => {
         const isConnected = v.isConnected;
         const hasValidDuration = !isNaN(v.duration) && v.duration > 30;
         const hasValidReadyState = v.readyState >= 1;

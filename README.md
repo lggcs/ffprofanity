@@ -20,7 +20,9 @@ A Firefox WebExtension that automatically detects profanity in subtitles, mutes 
 
 The extension can automatically detect and extract subtitles from:
 
-- **YouTube** (auto-generated and uploaded captions)
+- **YouTube** (auto-generated and uploaded captions, including Shorts —
+  captions are pulled from the Shorts player even though its CC toggle is
+  hidden; standard watch pages and playlist autoplay as before)
 - **Jellyfin** (local and remote instances, HLS streams, native and embedded subtitles)
 - **LookMovie**
 - **CineLite** (cinelite.xyz)
