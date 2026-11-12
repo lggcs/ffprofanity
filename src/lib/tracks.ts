@@ -78,46 +78,103 @@ export function isForcedTrack(track: SubtitleTrack): boolean {
 }
 
 /**
+ * Fraction of the runtime a track's cues reach. Sites routinely serve several
+ * files for the same language where only one spans the whole video, so this is
+ * the signal that separates a complete track from a truncated one.
+ * Returns null when the track's span or the runtime is unknown.
+ */
+export function trackCoverageRatio(
+  track: SubtitleTrack,
+  videoDurationMs: number
+): number | null {
+  if (!videoDurationMs || !Number.isFinite(videoDurationMs) || videoDurationMs <= 0) {
+    return null;
+  }
+  const lastCueMs = track.lastCueMs;
+  if (typeof lastCueMs !== 'number' || !Number.isFinite(lastCueMs) || lastCueMs <= 0) {
+    return null;
+  }
+  return Math.min(1, lastCueMs / videoDurationMs);
+}
+
+// A track reaching this fraction of the runtime is treated as complete; below
+// COVERAGE_PARTIAL_RATIO its cues run out long before the ending.
+export const COVERAGE_ACCEPTABLE_RATIO = 0.85;
+const COVERAGE_PARTIAL_RATIO = 0.5;
+const COVERAGE_FULL_BONUS = 14;
+const COVERAGE_PARTIAL_BONUS = 2;
+const COVERAGE_TRUNCATED_PENALTY = 14;
+
+/**
+ * Coverage term of the recommendation score. It outweighs the language match
+ * bonus on purpose: a full-length track the site filed under an unparseable
+ * language is a better choice than a truncated track in the right language.
+ */
+function coverageScore(
+  track: SubtitleTrack,
+  videoDurationMs: number | undefined
+): number {
+  if (!videoDurationMs) return 0;
+  const ratio = trackCoverageRatio(track, videoDurationMs);
+  if (ratio === null) return 0;
+  if (ratio >= COVERAGE_ACCEPTABLE_RATIO) return COVERAGE_FULL_BONUS;
+  if (ratio >= COVERAGE_PARTIAL_RATIO) return COVERAGE_PARTIAL_BONUS;
+  return -COVERAGE_TRUNCATED_PENALTY;
+}
+
+/**
+ * Stable identity for a track across detections (URL when present).
+ */
+export function trackKey(track: SubtitleTrack): string {
+  return track.url || track.id;
+}
+
+/**
  * Calculate recommendation score for a track
  * Higher score = better choice
  */
 export function calculateRecommendScore(
   track: SubtitleTrack,
-  settings: Pick<Settings, 'preferredLanguage' | 'preferSDH'>
+  settings: Pick<Settings, 'preferredLanguage' | 'preferSDH'>,
+  context?: { videoDurationMs?: number }
 ): number {
   let score = 0;
-  
+
   const normalizedTrackLang = normalizeLanguageCode(track.language);
   const normalizedPreferredLang = normalizeLanguageCode(settings.preferredLanguage);
-  
+
   // Language match (+10 for preferred, +5 for English fallback)
   if (normalizedTrackLang === normalizedPreferredLang) {
     score += 10;
   } else if (normalizedTrackLang === 'en') {
     score += 5;
   }
-  
+
   // SDH/CC preference (+3 for SDH if user prefers, -2 for forced)
   if (settings.preferSDH && isSDHTrack(track)) {
     score += 3;
   }
-  
+
   // Penalize forced narrative tracks (-5)
   if (isForcedTrack(track)) {
     score -= 5;
   }
-  
+
   // Default track gets a small bonus (+2)
   if (track.isDefault) {
     score += 2;
   }
-  
+
   // User-uploaded tracks get priority (+15)
   if (track.source === 'user') {
     score += 15;
   }
-  
-  return score;
+
+  // Coverage only ever breaks ties between candidates: it must not push a
+  // track that would otherwise be selectable below zero, or a site serving a
+  // single short-but-usable file would stop auto-selecting altogether.
+  const coverage = coverageScore(track, context?.videoDurationMs);
+  return coverage < 0 ? Math.max(0, score + coverage) : score + coverage;
 }
 
 /**
@@ -125,7 +182,8 @@ export function calculateRecommendScore(
  */
 export function selectBestTrack(
   tracks: SubtitleTrack[],
-  settings: Pick<Settings, 'preferredLanguage' | 'preferSDH'>
+  settings: Pick<Settings, 'preferredLanguage' | 'preferSDH'>,
+  context?: { videoDurationMs?: number }
 ): TrackSelection {
   if (tracks.length === 0) {
     return {
@@ -134,11 +192,11 @@ export function selectBestTrack(
       autoSelected: false,
     };
   }
-  
+
   // Calculate scores for all tracks
   const scoredTracks = tracks.map(track => ({
     ...track,
-    recommendScore: calculateRecommendScore(track, settings),
+    recommendScore: calculateRecommendScore(track, settings, context),
   }));
   
   // Sort by score descending

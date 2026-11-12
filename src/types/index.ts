@@ -51,6 +51,12 @@ export interface SubtitleTrack {
   embedded?: boolean;       // Is it embedded in video element?
   source: 'video' | 'network' | 'user';  // Where was this track detected?
   recommendScore: number;  // Selection priority score (calculated)
+  // Span of the cues this track actually delivered, learned after its first
+  // successful load. Sites can serve several files for one language where
+  // only some span the whole runtime, so labels alone can't rank them.
+  cueCount?: number;
+  firstCueMs?: number;
+  lastCueMs?: number;
 }
 
 // Track selection result

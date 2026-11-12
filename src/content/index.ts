@@ -25,6 +25,9 @@ import {
   selectBestTrack,
   formatTrackLabel,
   createTrackFromUser,
+  trackCoverageRatio,
+  trackKey,
+  COVERAGE_ACCEPTABLE_RATIO,
 } from "../lib/tracks";
 import {
   scanPageForTracks,
@@ -107,6 +110,137 @@ let unmuteTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Track URLs that have been processed via intercepted content (avoid double-fetch)
 const processedContentUrls = new Set<string>();
+
+// URLs currently being fetched. LookMovie announces the same file from several
+// watchers at once; without this, two selectTrack calls both see empty cues and
+// fetch/parse the same file twice.
+const inFlightTrackUrls = new Set<string>();
+
+// Tracks proven too short for the video, and how many replacements we tried.
+// Sites serve several files per language (lookmovie2: a 400-cue English file
+// covering 02:02-28:13 next to the player's full-length caption track), so a
+// selection can pass every label heuristic and still desert the viewer.
+const coverageRejected = new Set<string>();
+const COVERAGE_UPGRADE_MAX_ATTEMPTS = 3;
+let coverageUpgradeAttempts = 0;
+let coverageUpgradeInProgress = false;
+// An explicit pick by the viewer outranks the automatic coverage search.
+let coverageUpgradeSuspended = false;
+
+function videoDurationMs(): number {
+  const duration = videoElement?.duration;
+  return typeof duration === "number" && Number.isFinite(duration) && duration > 0
+    ? Math.round(duration * 1000)
+    : 0;
+}
+
+function spanOfCues(list: Cue[]): { count: number; firstMs: number; lastMs: number } | null {
+  if (list.length === 0) return null;
+  let firstMs = Number.POSITIVE_INFINITY;
+  let lastMs = 0;
+  for (const cue of list) {
+    if (cue.startMs < firstMs) firstMs = cue.startMs;
+    if (cue.endMs > lastMs) lastMs = cue.endMs;
+  }
+  return Number.isFinite(firstMs) ? { count: list.length, firstMs, lastMs } : null;
+}
+
+/** Record the measured span on every copy of this track we hold. */
+function stampTrackSpan(
+  track: SubtitleTrack,
+  span: { count: number; firstMs: number; lastMs: number },
+): void {
+  const key = trackKey(track);
+  track.cueCount = span.count;
+  track.firstCueMs = span.firstMs;
+  track.lastCueMs = span.lastMs;
+  for (const detected of detectedTracks) {
+    if (trackKey(detected) === key) {
+      detected.cueCount = span.count;
+      detected.firstCueMs = span.firstMs;
+      detected.lastCueMs = span.lastMs;
+    }
+  }
+  if (currentTrack && trackKey(currentTrack) === key) {
+    currentTrack.cueCount = span.count;
+    currentTrack.firstCueMs = span.firstMs;
+    currentTrack.lastCueMs = span.lastMs;
+  }
+}
+
+/** Live, HLS and timedtext sources build their cue list up over time. */
+function isStreamingTrackSource(track: SubtitleTrack): boolean {
+  const source = (track.source || "").toLowerCase();
+  return (
+    source.includes("plutotv") ||
+    source.includes("hls") ||
+    source.includes("segment") ||
+    source.includes("youtube")
+  );
+}
+
+/**
+ * A track that loaded but stops well before the end of the video is a dead end
+ * for the rest of the movie. Try the remaining detected tracks, best score
+ * first, until one covers the runtime.
+ */
+async function maybeUpgradePartialTrack(loaded: SubtitleTrack): Promise<void> {
+  if (coverageUpgradeInProgress || userUploadActive || !videoElement) return;
+  if (!settings.autoSelectTrack || loaded.source === "user") return;
+  if (isStreamingTrackSource(loaded)) return;
+  // An explicit pick (popup or the site's own subtitle menu) outranks us.
+  if (coverageUpgradeSuspended) return;
+
+  const durationMs = videoDurationMs();
+  if (durationMs === 0) return;
+  const ratio = trackCoverageRatio(loaded, durationMs);
+  if (ratio === null || ratio >= COVERAGE_ACCEPTABLE_RATIO) return;
+
+  log(
+    `Track "${loaded.label}" covers ${(ratio * 100).toFixed(1)}% of the video ` +
+      `(${loaded.cueCount} cues, ${Math.round((loaded.lastCueMs ?? 0) / 1000)}s of ` +
+      `${Math.round(durationMs / 1000)}s) — looking for a fuller track`,
+  );
+  coverageRejected.add(trackKey(loaded));
+
+  coverageUpgradeInProgress = true;
+  try {
+    while (coverageUpgradeAttempts < COVERAGE_UPGRADE_MAX_ATTEMPTS) {
+      const candidates = detectedTracks.filter(
+        (t) =>
+          t.source !== "user" &&
+          (t.url || t.embedded) &&
+          !coverageRejected.has(trackKey(t)),
+      );
+      if (candidates.length === 0) {
+        warn("No untried subtitle track left — subtitles will stop early in this video");
+        return;
+      }
+
+      const selection = selectBestTrack(candidates, settings, { videoDurationMs: durationMs });
+      const next = selection.track;
+      if (!next || !selection.autoSelected) {
+        warn("No auto-selectable subtitle track left to improve coverage");
+        return;
+      }
+
+      coverageUpgradeAttempts++;
+      coverageRejected.add(trackKey(next));
+      log(`Trying a fuller track: ${next.label} (${next.language}) from ${next.source}`);
+      await selectTrack(next, { replace: true });
+
+      const newRatio = trackCoverageRatio(next, durationMs);
+      if (newRatio === null || newRatio >= COVERAGE_ACCEPTABLE_RATIO) {
+        log(
+          `Coverage improved to ${newRatio === null ? "unknown" : `${(newRatio * 100).toFixed(1)}%`}`,
+        );
+        return;
+      }
+    }
+  } finally {
+    coverageUpgradeInProgress = false;
+  }
+}
 
 // SPA players (YouTube playlists/radio mix) swap videos inside one document.
 // Subtitle URLs from these sites are stamped with the video they serve, so a
@@ -208,6 +342,12 @@ async function resetSessionForVideoChange(): Promise<void> {
   currentTrack = null;
   processedContentUrls.clear();
   textTracksCues.length = 0;
+
+  // Coverage state is per-video too: a full-length track for the previous
+  // video says nothing about this one.
+  coverageRejected.clear();
+  coverageUpgradeAttempts = 0;
+  coverageUpgradeInProgress = false;
 
   if (overlayContainer) {
     const cueEl = overlayContainer.querySelector<HTMLElement>(".ffprofanity-cue");
@@ -1673,6 +1813,28 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     const trackToSelect = tracks[0];
     if (!trackToSelect) return;
 
+    // The site re-announces its own automatic pick whenever it re-applies the
+    // caption track. Once that file has been measured as too short and a
+    // fuller one took over, honouring the re-announcement would swap the
+    // viewer back onto the truncated file for the rest of the movie.
+    const isExplicitUserPick = (trackToSelect.source || "").includes("user-subtitle");
+    if (!isExplicitUserPick && coverageRejected.has(trackKey(trackToSelect))) {
+      log(
+        `Ignoring re-announced partial track: ${trackToSelect.label} (already replaced)`,
+      );
+      browser.runtime
+        .sendMessage({
+          type: "tracksUpdated",
+          tracks: detectedTracks,
+          currentTrack,
+        })
+        .catch(() => {});
+      return;
+    }
+    if (isExplicitUserPick) {
+      coverageUpgradeSuspended = true;
+    }
+
     const existingTrack = detectedTracks.find(
       (t) => t.url === trackToSelect.url || t.id === trackToSelect.id,
     );
@@ -1710,7 +1872,9 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
       if (!settings.autoSelectTrack) {
         log(`Auto-select disabled - detected ${detectedTracks.length} tracks but not auto-selecting`);
       } else {
-        const selection = selectBestTrack(detectedTracks, settings);
+        const selection = selectBestTrack(detectedTracks, settings, {
+          videoDurationMs: videoDurationMs(),
+        });
 
         if (selection.track && selection.autoSelected) {
           selectTrack(selection.track);
@@ -1718,6 +1882,11 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
         }
       }
     }
+  } else if (currentTrack && newTracks.length > 0 && settings.autoSelectTrack) {
+    // The track that best matches the label heuristics can still be a truncated
+    // file; the complete one is often only seen later (lookmovie2's full-length
+    // caption track arrives via the XHR interceptor after the site's own pick).
+    void maybeUpgradePartialTrack(currentTrack);
   }
 
   // Notify popup of new tracks
@@ -1794,9 +1963,14 @@ async function fetchSubtitleContent(url: string): Promise<string> {
 }
 
 /**
- * Select and load a subtitle track
+ * Select and load a subtitle track.
+ * `replace` forces the loaded cues to supersede the current set (track upgrade).
  */
-async function selectTrack(track: SubtitleTrack): Promise<void> {
+async function selectTrack(
+  track: SubtitleTrack,
+  options: { replace?: boolean } = {},
+): Promise<void> {
+  const replaceExistingCues = options.replace === true;
   log(
     `Selecting track: ${track.label} (${track.language}) from ${track.source}`,
   );
@@ -1813,6 +1987,28 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
   if (track.url && processedContentUrls.has(track.url)) {
     log(`Skipping fetch for ${track.url.substring(0, 60)} - already processed`);
     currentTrack = track;
+    return;
+  }
+
+  // LookMovie re-announces its own selection whenever the site re-applies the
+  // caption track, which re-selected the same file repeatedly and fetched it
+  // again each time. Cues already loaded for this track mean there is nothing
+  // to do; a failed load leaves cues empty and stays retryable.
+  if (
+    !replaceExistingCues &&
+    cues.length > 0 &&
+    currentTrack !== null &&
+    track.url !== undefined &&
+    trackKey(currentTrack) === track.url
+  ) {
+    log(`Track already loaded, not refetching: ${track.label}`);
+    return;
+  }
+
+  // Several watchers announce the same file within the same tick, before any
+  // of them has cues to show for it — let the first fetch win.
+  if (track.url && inFlightTrackUrls.has(track.url)) {
+    debug(`Fetch already in flight, not refetching: ${track.label}`);
     return;
   }
 
@@ -1848,37 +2044,50 @@ async function selectTrack(track: SubtitleTrack): Promise<void> {
     // number of times before surfacing the failure. Intermediate attempts
     // stay silent so users only see a notification if we ultimately fail.
     const MAX_ATTEMPTS = 3;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const isLastAttempt = attempt === MAX_ATTEMPTS;
-      try {
-        const content = await fetchSubtitleContent(track.url);
-        log(`Received ${content.length} bytes from subtitle URL (attempt ${attempt}/${MAX_ATTEMPTS})`);
-        log(`Content preview: ${content.substring(0, 200)}...`);
-        const cueCount = await handleSubtitleUpload(
-          content,
-          track.label,
-          track.source,
-          isLastAttempt ? undefined : { silent: true },
-        );
-        if (cueCount !== null && cueCount > 0) {
-          break;
-        }
-        if (!isLastAttempt) {
-          log(`Attempt ${attempt} yielded ${cueCount ?? 0} cues — retrying...`);
-          await new Promise((r) => setTimeout(r, 3000));
-        }
-      } catch (err) {
-        if (isLastAttempt) {
-          error("Failed to fetch subtitle track:", err);
-          showNotification(
-            "error",
-            `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
+    let loaded = false;
+    inFlightTrackUrls.add(track.url);
+    try {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const isLastAttempt = attempt === MAX_ATTEMPTS;
+        try {
+          const content = await fetchSubtitleContent(track.url);
+          log(`Received ${content.length} bytes from subtitle URL (attempt ${attempt}/${MAX_ATTEMPTS})`);
+          log(`Content preview: ${content.substring(0, 200)}...`);
+          const cueCount = await handleSubtitleUpload(
+            content,
+            track.label,
+            track.source,
+            isLastAttempt
+              ? { replace: replaceExistingCues }
+              : { silent: true, replace: replaceExistingCues },
           );
-        } else {
-          warn(`Subtitle fetch attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}) — retrying...`);
-          await new Promise((r) => setTimeout(r, 3000));
+          if (cueCount !== null && cueCount > 0) {
+            loaded = true;
+            break;
+          }
+          if (!isLastAttempt) {
+            log(`Attempt ${attempt} yielded ${cueCount ?? 0} cues — retrying...`);
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        } catch (err) {
+          if (isLastAttempt) {
+            error("Failed to fetch subtitle track:", err);
+            showNotification(
+              "error",
+              `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
+            );
+          } else {
+            warn(`Subtitle fetch attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}) — retrying...`);
+            await new Promise((r) => setTimeout(r, 3000));
+          }
         }
       }
+    } finally {
+      inFlightTrackUrls.delete(track.url);
+    }
+
+    if (loaded) {
+      await maybeUpgradePartialTrack(track);
     }
   } else if (track.embedded && videoElement) {
     // For embedded tracks, we need to read from textTracks API
@@ -2091,6 +2300,18 @@ function attachVideoListeners(video: HTMLVideoElement): void {
   // adopt one now and again shortly after (track list is stable by then).
   setupAutoDriftWatch();
   setTimeout(() => setupAutoDriftWatch(), 5000);
+
+  // Subtitles are usually fetched before the media attaches (the player shows
+  // a duration of NaN while it boots), so the coverage check inside
+  // selectTrack has no runtime to compare against. Re-run it the moment the
+  // real duration arrives, otherwise a truncated track stays in place for the
+  // whole movie.
+  const recheckCoverage = () => {
+    if (!currentTrack || videoDurationMs() === 0) return;
+    void maybeUpgradePartialTrack(currentTrack);
+  };
+  video.addEventListener("loadedmetadata", recheckCoverage);
+  video.addEventListener("durationchange", recheckCoverage);
 
   // A video element is now available — replay intercepted relays that
   // arrived before the player mounted (Shorts mounts its player late).
@@ -2556,6 +2777,20 @@ function getPlayerTextTracks(): TextTrack[] {
 }
 
 /**
+ * Video.js hands us plain page-world objects, and reading their properties from
+ * this compartment can throw "Permission denied to access property". Treat an
+ * unreadable track as unusable instead of letting it abort the caller.
+ */
+function readTrackProp<T>(track: unknown, prop: string): T | undefined {
+  try {
+    const value = (track as Record<string, unknown> | null)?.[prop];
+    return value as T | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Choose which native TextTrack to observe for automatic drift samples.
  * Prefers the currently showing track (the one the user sees on the site),
  * then showing > hidden > disabled kinds subtitles/captions. Returns null
@@ -2572,10 +2807,12 @@ function pickNativeTrack(video: HTMLVideoElement): TextTrack | null {
       adoptedSeen = true;
       return;
     }
-    if (t.kind !== "subtitles" && t.kind !== "captions") return;
-    if (t.mode === "showing" && !showing) showing = t;
-    else if (t.mode === "hidden" && !hidden) hidden = t;
-    else if (t.mode === "disabled" && !disabled) disabled = t;
+    const kind = readTrackProp<string>(t, "kind");
+    if (kind !== "subtitles" && kind !== "captions") return;
+    const mode = readTrackProp<string>(t, "mode");
+    if (mode === "showing" && !showing) showing = t;
+    else if (mode === "hidden" && !hidden) hidden = t;
+    else if (mode === "disabled" && !disabled) disabled = t;
   };
   for (let i = 0; i < video.textTracks.length; i++) consider(video.textTracks[i]);
   if (adoptedSeen) return adoptedNativeTrack;
@@ -2592,11 +2829,14 @@ function pickNativeTrack(video: HTMLVideoElement): TextTrack | null {
     s.trim().toLowerCase().replace(/\s*\d+$/, "").trim();
   const currentLabel = currentTrack?.label ? normLabel(currentTrack.label) : "";
   if (currentLang || currentLabel) {
-    const matched = playerTracks.find(
-      (t) =>
-        (!!currentLang && t.language === currentLang) ||
-        (!!currentLabel && !!t.label && normLabel(t.label) === currentLabel),
-    );
+    const matched = playerTracks.find((t) => {
+      const language = readTrackProp<string>(t, "language");
+      const label = readTrackProp<string>(t, "label");
+      return (
+        (!!currentLang && language === currentLang) ||
+        (!!currentLabel && !!label && normLabel(label) === currentLabel)
+      );
+    });
     if (matched) return matched;
   }
   for (const t of playerTracks) consider(t);
@@ -2628,7 +2868,19 @@ function setupAutoDriftWatch(): void {
     return;
   }
 
-  const video = videoElement;
+  try {
+    setupAutoDriftWatchInner(videoElement);
+  } catch (e) {
+    // Drift bookkeeping is optional: Video.js exposes page-world track objects
+    // whose properties can throw across compartments ("Permission denied to
+    // access property ..."). Letting that escape would abort the caller —
+    // processCues would never report the cues it just loaded, and selectTrack
+    // would retry the fetch it already completed.
+    debug(`Auto drift: watch setup failed: ${e}`);
+  }
+}
+
+function setupAutoDriftWatchInner(video: HTMLVideoElement): void {
   const track = pickNativeTrack(video);
   if (!track) {
     debug(
@@ -3685,7 +3937,7 @@ async function handleSubtitleUpload(
   content: string,
   filename?: string,
   source?: string,
-  options?: { silent?: boolean },
+  options?: { silent?: boolean; replace?: boolean },
 ): Promise<number | null> {
   // When a user upload is active, reject auto-detected subtitle content.
   // This prevents detected tracks from replacing user-provided subtitles.
@@ -3734,8 +3986,15 @@ async function handleSubtitleUpload(
     ...cue,
     source: source || 'user-upload'
   }));
-  
-  processCues(taggedCues);
+
+  const loadedSpan = spanOfCues(taggedCues);
+  if (loadedSpan && currentTrack) {
+    stampTrackSpan(currentTrack, loadedSpan);
+  }
+
+  // A replacement load must not accumulate onto the cues it replaces, even
+  // when it arrives under a source that processCues would treat as incremental.
+  processCues(taggedCues, { replace: options?.replace === true && !isUserUpload });
 
   // isUserUpload was already determined at the top of this function
   if (isUserUpload) {
@@ -4019,9 +4278,11 @@ function replacementLikely(existing: Cue[], incoming: Cue[]): boolean {
 
 /**
  * Process cues with profanity detection
- * For HLS streams, accumulate cues from multiple segments instead of replacing
+ * For HLS streams, accumulate cues from multiple segments instead of replacing.
+ * `replace` forces the incoming set to supersede the existing cues regardless
+ * of source heuristics (used when a partial track is swapped for a fuller one).
  */
-function processCues(newCues: Cue[]): void {
+function processCues(newCues: Cue[], options: { replace?: boolean } = {}): void {
   log(
     `Processing ${newCues.length} new cues, existing: ${cues.length}`,
   );
@@ -4076,7 +4337,7 @@ function processCues(newCues: Cue[]): void {
   // Track the untranslated cue list for drift correction. When the incoming
   // cues fully replace existing ones (track switch / upload), reset baseCues
   // and the per-movie drift state; otherwise accumulate into it.
-  const isReplacementSource = isUserSelectionSource(firstCueSource);
+  const isReplacementSource = isUserSelectionSource(firstCueSource) || options.replace === true;
   if (isReplacementSource || baseCues.length === 0 || replacementLikely(baseCues, processedNewCues)) {
     baseCues = processedNewCues;
   } else {
@@ -4104,9 +4365,9 @@ function processCues(newCues: Cue[]): void {
                           firstCueSource === 'user-upload' ||
                           firstCueSource.includes('user-subtitle');
 
-  if (isUserSelection && cues.length > 0) {
+  if ((isUserSelection || options.replace === true) && cues.length > 0) {
     log(
-      `Replacing ${cues.length} cues with ${processedNewCues.length} (user selected different track)`
+      `Replacing ${cues.length} cues with ${processedNewCues.length} (track switched)`
     );
     cues = processedNewCues;
   } else if (isYouTubeSource && cues.length > 0) {
