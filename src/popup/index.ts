@@ -6,6 +6,7 @@
 import "../styles/popup.css";
 import type { Settings, SubtitleTrack } from "../types";
 import { error } from '../lib/logger';
+import { sortTracksForDisplay } from "../lib/tracks";
 
 // State
 let isActive = false;
@@ -575,7 +576,13 @@ function handleChangeOrUpload(): void {
 function renderTrackOptions(): void {
   trackOptions.replaceChildren();
 
-  for (const track of detectedTracks) {
+  // Display order only: viewer-owned picks, then the preferred language,
+  // then languages A–Z, Unknown last — the stored order that per-language
+  // numbering follows is untouched.
+  for (const track of sortTracksForDisplay(
+    [...detectedTracks],
+    String(settings.preferredLanguage || "en"),
+  )) {
     const item = document.createElement("div");
     item.className = "track-item";
     if (track.isSDH) {

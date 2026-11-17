@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { isSubtitleUrl, detectSubtitleFormat } from "../lib/extractor";
 import { getLanguageName } from "../lib/language";
+import { upgradeDuplicateTrack } from "../lib/tracks";
 import { log, debug, warn, error } from '../lib/logger';
 
 // Active mute states per tab — reference-counted to handle overlapping profanity
@@ -290,9 +291,15 @@ async function getAggregatedStatus(tabId: number): Promise<{
       if (s.userUploadActive) userUploadActive = true;
       if (s.detectedTracks) {
         for (const track of s.detectedTracks) {
-          if (
-            !allTracks.some((t) => t.url === track.url || t.id === track.id)
-          ) {
+          // Same-URL duplicates upgrade an unknown-language stored entry in
+          // place instead of being dropped — the labeled twin can arrive
+          // from a later-informed relay.
+          const known = allTracks.find(
+            (t) => t.url === track.url || t.id === track.id,
+          );
+          if (known) {
+            upgradeDuplicateTrack(known, track);
+          } else {
             allTracks.push(track);
           }
         }
@@ -405,6 +412,22 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
         userUploadActive: false,
       };
 
+      // Merge tracks with the upgrade rule: a duplicate arriving from a
+      // better-informed relay relabels an unknown-language stored entry
+      // (labeled twin wins, no extra fetching).
+      const mergedTracks: SubtitleTrack[] = [...existing.detectedTracks];
+      const freshTracks: SubtitleTrack[] = [];
+      for (const t of frameStatus.detectedTracks) {
+        const known = mergedTracks.find(
+          (et) => et.url === t.url || et.id === t.id,
+        );
+        if (known) {
+          upgradeDuplicateTrack(known, t);
+        } else {
+          freshTracks.push(t);
+        }
+      }
+
       // Merge status (any frame with video means tab has video)
       tabStatus.set(tabId, {
         hasVideo: existing.hasVideo || frameStatus.hasVideo,
@@ -415,15 +438,7 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender) => {
           frameStatus.profanityCount,
         ),
         currentTrack: frameStatus.currentTrack || existing.currentTrack,
-        detectedTracks: [
-          ...existing.detectedTracks,
-          ...frameStatus.detectedTracks.filter(
-            (t) =>
-              !existing.detectedTracks.some(
-                (et) => et.url === t.url || et.id === t.id,
-              ),
-          ),
-        ],
+        detectedTracks: [...mergedTracks, ...freshTracks],
         lastUpdated: Date.now(),
         userUploadActive: existing.userUploadActive || (frameStatus.userUploadActive || false),
       });

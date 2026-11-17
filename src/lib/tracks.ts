@@ -147,6 +147,25 @@ export function trackKey(track: SubtitleTrack): string {
 
 // Label placeholders players produce for unlabeled text tracks
 const PLACEHOLDER_LABEL = /^(unknown|und|undefined|none|no label|)$/i;
+// Labels that carry no usable name: current placeholders plus prior "Unknown
+// N" relabels, so a group member that later resolves lets the rest renumber.
+const UNKNOWN_GROUP_LABEL =
+  /^(unknown( \d+)?|und|undefined|none|no label|)$/i;
+
+/**
+ * The display name a track's language resolves to, if any — the language
+ * field first, then the bare code token in its label ("ENG", "HRV"), then
+ * the label text itself when it IS a language name ("Croatian"). null means
+ * unresolvable: a real-named label stays untouched; a placeholder label
+ * joins the numbered Unknown group.
+ */
+export function resolvedLanguageName(track: SubtitleTrack): string | null {
+  return (
+    languageDisplayName((track.language || '').trim()) ||
+    languageDisplayName(bareLanguageCodeToken(track.label || '')) ||
+    languageDisplayName((track.label || '').trim())
+  );
+}
 
 /** The source paths whose labels belong to the viewer, not to a site relay. */
 function isViewerOwnedTrack(track: SubtitleTrack): boolean {
@@ -169,42 +188,121 @@ function bareLanguageCodeToken(label: string): string {
  * bare names, and page scripts number their own list per relay — the same
  * file can appear as "ENG", "English" and "English 1" in one popup.
  *  - placeholder labels and bare codes become the language display name
- *    (from the track's language field, else from the code token itself);
- *  - tracks sharing a known language are numbered by list order
+ *    (resolved from the track's language field, its label's code token, or
+ *    the label being a language name itself);
+ *  - tracks sharing a resolved language name are numbered by list order
  *    ("English 1", "English 2", ...) exactly as one relayed site list is;
  *  - "(a)"-style variant suffixes survive renumbering unchanged
  *    (isVariantTrackLabel demotion depends on them);
  *  - labels that carry a real name or marker ("English SDH") are left alone;
- *  - user uploads and site-menu picks keep the label the viewer chose.
+ *  - user uploads and site-menu picks keep the label the viewer chose;
+ *  - placeholder-labeled tracks whose language does not resolve become one
+ *    numbered "Unknown" group ("Unknown 1..N") in list order.
  * Mutates the tracks in place; safe to run repeatedly (idempotent).
  */
 export function canonicalizeTrackLabels(tracks: SubtitleTrack[]): void {
-  const langOf = (t: SubtitleTrack): string =>
-    normalizeLanguageCode(t.language) ||
-    normalizeLanguageCode(bareLanguageCodeToken(t.label || ''));
   const counts = new Map<string, number>();
   for (const t of tracks) {
-    const lang = langOf(t);
-    if (lang) {
-      counts.set(lang, (counts.get(lang) ?? 0) + 1);
+    const name = resolvedLanguageName(t);
+    if (name) {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
     }
   }
   const seq = new Map<string, number>();
   for (const t of tracks) {
     if (isViewerOwnedTrack(t)) continue;
-    const lang = langOf(t);
-    const name = lang ? languageDisplayName(lang) : null;
-    if (!lang || !name) continue;
+    const name = resolvedLanguageName(t);
+    if (!name) continue;
     const { base, variant } = splitVariantSuffix(t.label || '');
     const unNumbered = base.replace(/\s+\d+$/, '').trim() || base;
     const isPlaceholder =
       PLACEHOLDER_LABEL.test(unNumbered) || !!bareLanguageCodeToken(unNumbered);
     if (!isPlaceholder && unNumbered.toLowerCase() !== name.toLowerCase()) continue;
-    const n = (seq.get(lang) ?? 0) + 1;
-    seq.set(lang, n);
-    const suffix = (counts.get(lang) ?? 0) > 1 ? ` ${n}` : '';
+    const n = (seq.get(name) ?? 0) + 1;
+    seq.set(name, n);
+    const suffix = (counts.get(name) ?? 0) > 1 ? ` ${n}` : '';
     t.label = `${name}${suffix}${variant ? ` ${variant}` : ''}`;
   }
+  const unknowns = tracks.filter(
+    (t) =>
+      !isViewerOwnedTrack(t) &&
+      !resolvedLanguageName(t) &&
+      UNKNOWN_GROUP_LABEL.test((t.label || '').trim()),
+  );
+  unknowns.forEach((t, i) => {
+    t.label = unknowns.length > 1 ? `Unknown ${i + 1}` : 'Unknown';
+  });
+}
+
+/**
+ * Sort-group name for the popup track list: the resolved language display
+ * name when one exists, the viewer-owned label itself when the track is an
+ * upload or site-menu pick, the relay label when it carried a real name we
+ * could not map, and "Unknown" for the numbered placeholder group.
+ */
+export function trackLanguageGroup(track: SubtitleTrack): string {
+  const name = resolvedLanguageName(track);
+  if (name) return name;
+  if (isViewerOwnedTrack(track)) {
+    return (track.label || '').trim() || 'Unknown';
+  }
+  const label = (track.label || '').trim();
+  if (!label || UNKNOWN_GROUP_LABEL.test(label)) return 'Unknown';
+  return label;
+}
+
+/**
+ * Popup display order: viewer-owned picks and uploads first (the viewer's
+ * own controls), then the preferred language, then every other language
+ * alphabetically, and the "Unknown" group last. Within a group the incoming
+ * array order is preserved, so per-language numbering stays ascending.
+ */
+export function sortTracksForDisplay(
+  tracks: SubtitleTrack[],
+  preferredLanguage: string | undefined,
+): SubtitleTrack[] {
+  const preferredName = languageDisplayName(preferredLanguage || '');
+  const rank = (track: SubtitleTrack, group: string): number => {
+    if (isViewerOwnedTrack(track)) return 0;
+    if (group === 'Unknown') return 3;
+    if (preferredName && group === preferredName) return 1;
+    return 2;
+  };
+  return tracks
+    .map((track, index) => ({ track, index, group: trackLanguageGroup(track) }))
+    .sort((a, b) => {
+      const byRank = rank(a.track, a.group) - rank(b.track, b.group);
+      if (byRank !== 0) return byRank;
+      if (a.group !== b.group) return a.group.localeCompare(b.group);
+      return a.index - b.index;
+    })
+    .map((entry) => entry.track);
+}
+
+/**
+ * Duplicate-URL ingestion rule: relays race, and a file whose URL carries
+ * no language (hashed caption hosts) can be stored as an unknown-language
+ * placeholder while its named twin loses the same-URL dedupe. When the
+ * arriving twin resolves a language the stored copy cannot, adopt the
+ * twin's language metadata in place. Returns true when the stored entry
+ * changed; the arriving copy is always treated as a duplicate and never
+ * added twice. Viewer-owned entries are never rewritten.
+ */
+export function upgradeDuplicateTrack(
+  existing: SubtitleTrack,
+  incoming: SubtitleTrack,
+): boolean {
+  if (
+    isViewerOwnedTrack(existing) ||
+    resolvedLanguageName(existing) ||
+    !resolvedLanguageName(incoming)
+  ) {
+    return false;
+  }
+  existing.language = incoming.language;
+  existing.label = incoming.label;
+  existing.isSDH = incoming.isSDH;
+  return true;
 }
 
 /**

@@ -31,6 +31,7 @@ import {
   canonicalizeTrackLabels,
   normalizeLanguageCode,
   COVERAGE_ACCEPTABLE_RATIO,
+  upgradeDuplicateTrack,
 } from "../lib/tracks";
 import {
   isConsistentCrossTransfer,
@@ -1180,7 +1181,7 @@ function handleInterceptedMessage(event: MessageEvent): void {
       url: resolvedUrl,
       label: sub.label || getLanguageName(language),
       language,
-      isSDH: /sdh|cc|hearing|deaf/i.test(sub.label || ""),
+      isSDH: /\b(?:sdh|cc|deaf|hearing[ -]?impaired)\b/i.test(sub.label || ""),
       isDefault: false,
       embedded: false,
       source: source,
@@ -1844,15 +1845,29 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     }
   }
 
-  // Filter out duplicates
-  const newTracks = tracks.filter(
-    (track) =>
-      !detectedTracks.some((t) => t.url === track.url || t.id === track.id),
-  );
+  // Filter out duplicates — with one upgrade rule: relays race, and a file
+  // whose URL carries no language (hashed caption hosts) can be stored as
+  // an unknown-language placeholder while its named twin loses the same-URL
+  // dedupe. When the arriving duplicate resolves a language the stored copy
+  // cannot, adopt its metadata in place (upgradeDuplicateTrack).
+  const newTracks: SubtitleTrack[] = [];
+  let upgradedDuplicate = false;
+  for (const track of tracks) {
+    const existing = detectedTracks.find(
+      (t) => t.url === track.url || t.id === track.id,
+    );
+    if (!existing) {
+      newTracks.push(track);
+    } else if (upgradeDuplicateTrack(existing, track)) {
+      upgradedDuplicate = true;
+    }
+  }
 
   // Add new tracks to the list
-  if (newTracks.length > 0) {
-    detectedTracks.push(...newTracks);
+  if (newTracks.length > 0 || upgradedDuplicate) {
+    if (newTracks.length > 0) {
+      detectedTracks.push(...newTracks);
+    }
     // One canonical labeling pass over the merged list: raw codes and
     // placeholder names resolve to language names, same-language tracks
     // number as one sequence. Applied here — not in each relay — so page

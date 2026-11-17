@@ -5,8 +5,11 @@ import {
   canonicalizeTrackLabels,
   isVariantTrackLabel,
   selectBestTrack,
+  sortTracksForDisplay,
   trackCoverageRatio,
   trackKey,
+  trackLanguageGroup,
+  upgradeDuplicateTrack,
 } from "../src/lib/tracks";
 import type { SubtitleTrack } from "../src/types";
 
@@ -184,8 +187,9 @@ describe("canonicalizeTrackLabels", () => {
     canonicalizeTrackLabels(tracks);
 
     expect(tracks[0]?.label).toBe("English");
-    // Unknown language: nothing better to call it — label stays.
-    expect(tracks[1]?.label).toBe("UNKNOWN");
+    // The lone unresolvable placeholder lands in the (numbered, when several)
+    // Unknown group instead of surfacing raw relay text.
+    expect(tracks[1]?.label).toBe("Unknown");
     // No language field: the code token itself still resolves.
     expect(tracks[2]?.label).toBe("Croatian");
   });
@@ -236,5 +240,201 @@ describe("canonicalizeTrackLabels", () => {
     expect(tracks[0]?.label).toBe("MY MOVIE.srt");
     expect(tracks[1]?.label).toBe("English 4");
     expect(tracks[2]?.label).toBe("English SDH");
+  });
+});
+
+describe("canonicalizeTrackLabels — unknown group", () => {
+  it("collects unresolvable placeholders into a numbered Unknown group", () => {
+    const tracks = [
+      track({ id: "u1", label: "UNKNOWN", language: "unknown" }),
+      track({ id: "e1", label: "ENG", language: "eng" }),
+      track({ id: "u2", label: "UNKNOWN", language: "unknown" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks.map((t) => t.label)).toEqual([
+      "Unknown 1",
+      "English",
+      "Unknown 2",
+    ]);
+
+    // Idempotent: later passes keep the numbers stable.
+    canonicalizeTrackLabels(tracks);
+    expect(tracks.map((t) => t.label)).toEqual([
+      "Unknown 1",
+      "English",
+      "Unknown 2",
+    ]);
+  });
+
+  it("renumbers the group when a member later resolves", () => {
+    const tracks = [
+      track({ id: "u1", label: "UNKNOWN", language: "unknown" }),
+      track({ id: "u2", label: "UNKNOWN", language: "unknown" }),
+      track({ id: "u3", label: "UNKNOWN", language: "unknown" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+    expect(tracks.map((t) => t.label)).toEqual([
+      "Unknown 1",
+      "Unknown 2",
+      "Unknown 3",
+    ]);
+
+    // The labeled twin arrives by URL upgrade; the group renumbers around it.
+    tracks[1]!.language = "scc";
+    canonicalizeTrackLabels(tracks);
+    expect(tracks.map((t) => t.label)).toEqual([
+      "Unknown 1",
+      "Serbian (Cyrillic)",
+      "Unknown 2",
+    ]);
+  });
+
+  it("leaves real relay names untouched even without a resolvable language", () => {
+    const tracks = [
+      track({ id: "r1", label: "Arabic (Saudia)", language: "unknown" }),
+      track({ id: "r2", label: "", language: "und" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("Arabic (Saudia)");
+    expect(tracks[1]?.label).toBe("Unknown");
+  });
+
+  it("numbers a name-labeled relay together with its coded copies", () => {
+    const tracks = [
+      track({ id: "c", label: "HRV", language: "hrv" }),
+      track({ id: "w", label: "Croatian", language: "" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("Croatian 1");
+    expect(tracks[1]?.label).toBe("Croatian 2");
+  });
+});
+
+describe("trackLanguageGroup", () => {
+  it("groups by the resolved language name", () => {
+    expect(trackLanguageGroup(track({ language: "en" }))).toBe("English");
+    expect(trackLanguageGroup(track({ language: "scc" }))).toBe(
+      "Serbian (Cyrillic)",
+    );
+    expect(trackLanguageGroup(track({ label: "HRV", language: "hrv" }))).toBe(
+      "Croatian",
+    );
+  });
+
+  it("falls back to the relay label when it is a real name it cannot map", () => {
+    expect(
+      trackLanguageGroup(track({ label: "Arabic (Saudia)", language: "unknown" })),
+    ).toBe("Arabic (Saudia)");
+    expect(
+      trackLanguageGroup(track({ label: "MOVIE.srt", source: "user", language: "" })),
+    ).toBe("MOVIE.srt");
+  });
+
+  it("sends unresolved placeholders to the Unknown group", () => {
+    expect(
+      trackLanguageGroup(track({ label: "Unknown 3", language: "unknown" })),
+    ).toBe("Unknown");
+  });
+});
+
+describe("upgradeDuplicateTrack", () => {
+  it("adopts language metadata from the arriving twin the stored copy lacks", () => {
+    const stored = track({
+      id: "stored",
+      url: fullCaptions.url,
+      label: "UNKNOWN",
+      language: "unknown",
+    });
+    const twin = track({
+      id: "twin",
+      url: fullCaptions.url,
+      label: "English SDH",
+      language: "en",
+      isSDH: true,
+    });
+
+    expect(upgradeDuplicateTrack(stored, twin)).toBe(true);
+    expect(stored.language).toBe("en");
+    expect(stored.label).toBe("English SDH");
+    expect(stored.isSDH).toBe(true);
+  });
+
+  it("never downgrades a resolved copy or rewrites a viewer-owned one", () => {
+    const resolved = track({ id: "r", label: "ENG", language: "eng" });
+    const unknownTwin = track({
+      id: "u",
+      label: "UNKNOWN",
+      language: "unknown",
+    });
+    expect(upgradeDuplicateTrack(resolved, unknownTwin)).toBe(false);
+    expect(resolved.label).toBe("ENG");
+
+    const upload = track({
+      id: "up",
+      label: "MOVIE.srt",
+      source: "user",
+      language: "",
+    });
+    const namedTwin = track({ id: "n", label: "English", language: "en" });
+    expect(upgradeDuplicateTrack(upload, namedTwin)).toBe(false);
+    expect(upload.label).toBe("MOVIE.srt");
+  });
+
+  it("is idempotent once upgraded", () => {
+    const stored = track({ id: "s", label: "UNKNOWN", language: "unknown" });
+    const twin = track({ id: "t", label: "ENG", language: "eng" });
+
+    expect(upgradeDuplicateTrack(stored, twin)).toBe(true);
+    expect(upgradeDuplicateTrack(stored, twin)).toBe(false);
+  });
+});
+
+describe("sortTracksForDisplay", () => {
+  it("orders viewer-owned, preferred language, A–Z, Unknown last", () => {
+    const upload = track({
+      id: "up",
+      label: "MOVIE.srt",
+      source: "user",
+      language: "",
+    });
+    const en1 = track({ id: "en1", label: "English 1", language: "en" });
+    const es = track({ id: "es", label: "Spanish", language: "es" });
+    const hr = track({ id: "hr", label: "HRV", language: "hrv" });
+    const en2 = track({ id: "en2", label: "English 2", language: "en" });
+    const un1 = track({ id: "un1", label: "Unknown 1", language: "unknown" });
+    const un2 = track({ id: "un2", label: "Unknown 2", language: "unknown" });
+
+    const out = sortTracksForDisplay(
+      [en1, es, hr, en2, un1, upload, un2],
+      "en",
+    );
+
+    // Within each group the incoming array order survives (numbering order).
+    expect(out.map((t) => t.id)).toEqual([
+      "up",
+      "en1",
+      "en2",
+      "hr",
+      "es",
+      "un1",
+      "un2",
+    ]);
+  });
+
+  it("keeps the remaining groups alphabetical when the preferred one is absent", () => {
+    const en = track({ id: "en", language: "en" });
+    const sq = track({ id: "sq", label: "SQ", language: "sq" });
+
+    const out = sortTracksForDisplay([en, sq], "hu");
+
+    // Albanian sorts before English when nothing matches the preference.
+    expect(out.map((t) => t.id)).toEqual(["sq", "en"]);
   });
 });
