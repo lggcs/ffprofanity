@@ -111,6 +111,40 @@ export function isConsistentCrossTransfer(
   return true;
 }
 
+/** What counts as a re-hosted copy of the same cue grid */
+export const NEAR_DUPLICATE = {
+  /** Paired cue starts may drift this much and still be the same grid */
+  startToleranceMs: 50,
+  /** The share of paired starts that must land inside the tolerance */
+  matchFraction: 0.99,
+} as const;
+
+/**
+ * True when two tracks share essentially the same cue timing grid — the
+ * signature of a re-hosted copy of the same file (sites serve clones under
+ * different ids/URLs). A near-identity fit against such a copy proves
+ * nothing about the display: the "reference" is the displayed file again,
+ * re-uploaded, so its agreement is not independent evidence.
+ */
+export function isNearDuplicateTrack(displayed: CueLike[], reference: CueLike[]): boolean {
+  if (displayed.length < 2 || reference.length < 2) return false;
+  if (
+    Math.abs(displayed.length - reference.length) >
+    Math.max(1, 0.01 * displayed.length)
+  ) {
+    return false;
+  }
+  const n = Math.min(displayed.length, reference.length);
+  let close = 0;
+  for (let i = 0; i < n; i++) {
+    const d = displayed[i];
+    const r = reference[i];
+    if (!d || !r) continue;
+    if (Math.abs(d.startMs - r.startMs) <= NEAR_DUPLICATE.startToleranceMs) close++;
+  }
+  return close / n >= NEAR_DUPLICATE.matchFraction;
+}
+
 interface PreparedCue {
   cue: CueLike;
   norm: string;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isConsistentCrossTransfer,
+  isNearDuplicateTrack,
   isNearIdentityFit,
   RATE_OUT_OF_RANGE,
   reconcileTracks,
@@ -197,5 +198,43 @@ describe("PAL cross-transfer, end to end", () => {
     expect(first.gateFailures).toEqual([RATE_OUT_OF_RANGE]);
     expect(second.gateFailures).toEqual([RATE_OUT_OF_RANGE]);
     expect(isConsistentCrossTransfer([first.model!, second.model!])).toBe(true);
+  });
+});
+
+describe("isNearDuplicateTrack", () => {
+  // 50 cues on one shared timing grid
+  const GRID: CueLike[] = Array.from({ length: 50 }, (_, i) =>
+    makeCue(i, 5000 + i * SPACING_MS),
+  );
+
+  it("recognizes a re-hosted copy of the same cue grid (either direction)", () => {
+    // Re-encodes are not byte-identical: a few starts drift within a frame.
+    const clone = GRID.map((cue, i) => ({
+      ...cue,
+      startMs: cue.startMs + (i % 25 === 0 ? 30 : 0),
+    }));
+    expect(isNearDuplicateTrack(GRID, clone)).toBe(true);
+    expect(isNearDuplicateTrack(clone, GRID)).toBe(true);
+  });
+
+  it("rejects a same-text release on a different grid (the ASR copy)", () => {
+    const shifted = GRID.map((cue) => ({ ...cue, startMs: cue.startMs + 3000 }));
+    expect(isNearDuplicateTrack(GRID, shifted)).toBe(false);
+  });
+
+  it("rejects a differently segmented release", () => {
+    // Same timeline, but every other cue pair merged into one cue.
+    const merged: CueLike[] = [];
+    for (let i = 0; i < GRID.length; i += 2) {
+      const a = GRID[i]!;
+      const b = GRID[i + 1]!;
+      merged.push({ startMs: a.startMs, endMs: b.endMs, text: `${a.text} ${b.text}` });
+    }
+    expect(isNearDuplicateTrack(GRID, merged)).toBe(false);
+  });
+
+  it("rejects truncated copies and empty input", () => {
+    expect(isNearDuplicateTrack(GRID, GRID.slice(0, 20))).toBe(false);
+    expect(isNearDuplicateTrack([], GRID)).toBe(false);
   });
 });

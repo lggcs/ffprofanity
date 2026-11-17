@@ -34,6 +34,7 @@ import {
 } from "../lib/tracks";
 import {
   isConsistentCrossTransfer,
+  isNearDuplicateTrack,
   isNearIdentityFit,
   RATE_OUT_OF_RANGE,
   reconcileTracks,
@@ -182,8 +183,11 @@ const syncUserLocked = new Set<string>();
 // Arbitration paused by an explicit pick; cleared when the viewer
 // re-enables automatic timing. The track-swap machinery stays suspended.
 let syncSuspended = false;
-/** Reference fetches per displayed track per session (bandwidth bound) */
-const SYNC_MAX_REF_ATTEMPTS = 2;
+/** Hard cap on reference fetches per arbitration. The evidence standard is
+ * two agreeing fits by definition; junk references (mangled text, clones)
+ * don't count as evidence but still cost a fetch, so the fetch count — not
+ * an attempt quota — carries the bandwidth bound. */
+const SYNC_MAX_REF_FETCHES = 5;
 const SYNC_REF_CACHE_MAX = 8;
 const SYNC_MIN_CUES = 30;
 const SYNC_MIN_REF_CUES = 10;
@@ -2704,11 +2708,12 @@ async function loadSyncReferenceCues(url: string): Promise<Cue[] | null> {
 }
 
 /**
- * Compare the displayed track's timeline against one other same-language
- * track (≤ 2 fetches per displayed track per session) and act on the
- * verdict: switch to the reference when it wins on priors, or veto
- * native-pairing drift models that contradict it. Every action is gated;
- * when nothing is certain, nothing changes.
+ * Compare the displayed track's timeline against other same-language tracks
+ * until one accepted fit or two agreeing cross-transfer fits — or the fetch
+ * cap — settles the question, then act: switch when the disagreement is
+ * proven, or veto native-pairing drift models that contradict a match.
+ * Junk references (mangled text, near-identical clones) cost fetches, not
+ * evidence. Every action is gated; when nothing is certain, nothing changes.
  */
 async function maybeSettleSyncVerdict(): Promise<void> {
   const track = currentTrack;
@@ -2751,30 +2756,53 @@ async function maybeSettleSyncVerdict(): Promise<void> {
   syncRefTried.set(key, tried);
   try {
     let fitted: { result: ReconcileResult; ref: SubtitleTrack } | null = null;
-    // Fits the rate gate had to reject solely on rate — raw material for the
-    // cross-transfer verdict below.
+    // Fits the rate gate had to reject solely on rate — candidate
+    // cross-transfer fingerprints; the verdict below needs two that agree.
     const crossTransferFits: Array<{ result: ReconcileResult; ref: SubtitleTrack }> = [];
-    for (const ref of candidates.slice(0, SYNC_MAX_REF_ATTEMPTS)) {
+    let agreed: Array<{ result: ReconcileResult; ref: SubtitleTrack }> | null = null;
+    let fetches = 0;
+    for (const ref of candidates) {
+      if (fitted || agreed || fetches >= SYNC_MAX_REF_FETCHES) break;
       if (syncSuspended) return;
       const refUrl = ref.url;
       if (!refUrl) continue;
       tried.add(trackKey(ref));
+      if (!syncRefCueCache.has(refUrl)) fetches++;
       const refCues = await loadSyncReferenceCues(refUrl);
       if (!refCues || refCues.length < SYNC_MIN_REF_CUES) continue;
       const result = reconcileTracks(baseCues, refCues);
       if (result.accepted && result.model) {
+        if (isNearIdentityFit(result.model) && isNearDuplicateTrack(baseCues, refCues)) {
+          // A near-identical copy of the display agrees with it trivially —
+          // the reference is the same file re-hosted, not an opinion.
+          debug(
+            `Sync arbitration: "${ref.label}" mirrors the display's cue grid — skipped`,
+          );
+          continue;
+        }
         fitted = { result, ref };
         break;
       }
       // A clean pairing that fails ONLY the rate gate is not junk: it is a
-      // candidate cross-transfer fingerprint (verdict below).
+      // candidate cross-transfer fingerprint (verdict below). Junk fits
+      // (mangled text, no transform) don't consume evidence — the fetch cap
+      // bounds the work instead.
       if (
         !result.accepted &&
         result.model &&
         result.gateFailures.length === 1 &&
         result.gateFailures[0] === RATE_OUT_OF_RANGE
       ) {
-        crossTransferFits.push({ result, ref });
+        const fit = { result, ref };
+        const fitModel = result.model;
+        for (const prev of crossTransferFits) {
+          if (isConsistentCrossTransfer([fitModel, prev.result.model!])) {
+            agreed = [prev, fit];
+            break;
+          }
+        }
+        crossTransferFits.push(fit);
+        if (agreed) break;
       }
       debug(
         `Sync arbitration: fit against "${ref.label}" rejected ` +
@@ -2788,65 +2816,66 @@ async function maybeSettleSyncVerdict(): Promise<void> {
     const model = fitted?.result.model ?? null;
 
     if (!fitted || !model) {
-      const cross = crossTransferFits.filter((f) => f.result.model);
-      if (cross.length >= 2 && isConsistentCrossTransfer(cross.map((f) => f.result.model!))) {
+      if (agreed) {
         // PAL-style wrong-transport case: the display pairs cleanly with the
-        // references but at a rate far outside the ±2% envelope, and every
-        // reference measured the SAME foreign rate at the same lead-in. The
-        // disagreement is then proven, so the viewer gets the reference —
-        // and never a remap: a 4% model is exactly what the rate envelope
-        // exists to refuse. Switch only; corrections stay envelope-gated.
+        // references but at a rate far outside the ±2% envelope, and two
+        // references measured the SAME foreign rate at the same lead-in.
+        // The disagreement is then proven, so the viewer gets the reference
+        // — and never a remap: a 4% model is exactly what the rate envelope
+        // exists to refuse. Proven disagreement is the gate here, not a
+        // score contest: full-length tracks of the language tie on priors,
+        // so "best ref" means the best-scored agreeing reference.
         syncVerdictByTrack.set(key, "odd");
-        const best = cross[0]; // candidates were score-sorted; the first fit wins the priors
-        if (!best?.result.model) {
+        const leadFit = agreed[0];
+        const leadModel = leadFit?.result.model;
+        if (!leadFit || !leadModel) {
           syncVerdictByTrack.set(key, "inconclusive");
           applyHeldNativeModel();
           return;
         }
-        const crossRef = best.ref;
-        const crossModel = best.result.model;
-        const ratePct = Math.round(Math.abs(1 - crossModel.rate) * 1000) / 10;
+        const leadPct = Math.round(Math.abs(1 - leadModel.rate) * 1000) / 10;
         if (syncUserLocked.has(key)) {
           showNotification(
             "info",
-            `"${track.label}" follows a different timing master (~${ratePct}%) — keeping your pick`,
+            `"${track.label}" follows a different timing master (~${leadPct}%) — keeping your pick`,
             false,
           );
           applyHeldNativeModel();
           return;
         }
         if (userUploadActive) return;
-        const crossCoverage = durationMs > 0 ? trackCoverageRatio(crossRef, durationMs) : null;
-        if (crossCoverage !== null && crossCoverage < COVERAGE_ACCEPTABLE_RATIO) {
+        // Target: the best-scored agreeing fit whose track covers the
+        // runtime — the partner is timing-equivalent, so a truncated lead
+        // fit falls through to the proven alternative.
+        let crossTarget: { ref: SubtitleTrack; rate: number } | null = null;
+        for (const fit of agreed) {
+          const fitModel = fit.result.model;
+          if (!fitModel) continue;
+          const fitCoverage = durationMs > 0 ? trackCoverageRatio(fit.ref, durationMs) : null;
+          if (fitCoverage !== null && fitCoverage < COVERAGE_ACCEPTABLE_RATIO) continue;
+          crossTarget = { ref: fit.ref, rate: fitModel.rate };
+          break;
+        }
+        if (!crossTarget) {
           log(
-            `Sync arbitration: keeping "${track.label}" — "${crossRef.label}" does not cover the runtime`,
+            `Sync arbitration: cross-transfer disagreement proven, but no agreeing reference covers the runtime — keeping "${track.label}"`,
           );
           applyHeldNativeModel();
           return;
         }
-        if (
-          calculateRecommendScore(crossRef, settings, scoreContext) <=
-          calculateRecommendScore(track, settings, scoreContext)
-        ) {
-          log(
-            `Sync arbitration: cross-transfer disagreement with "${crossRef.label}" but the ` +
-            "reference is not a better track — keeping the display",
-          );
-          applyHeldNativeModel();
-          return;
-        }
+        const ratePct = Math.round(Math.abs(1 - crossTarget.rate) * 1000) / 10;
         syncSwitchedAway.add(key);
         log(
-          `Sync arbitration: every reference places "${track.label}" at rate ` +
-          `${crossModel.rate.toFixed(4)} — a different timing master; ` +
-          `switching to "${crossRef.label}" (no remap)`,
+          `Sync arbitration: every consistent reference places "${track.label}" at rate ` +
+          `${crossTarget.rate.toFixed(4)} — a different timing master; ` +
+          `switching to "${crossTarget.ref.label}" (no remap)`,
         );
         showNotification(
           "info",
-          `Switched to "${crossRef.label}" — the previous track follows a different timing master (~${ratePct}%)`,
+          `Switched to "${crossTarget.ref.label}" — the previous track follows a different timing master (~${ratePct}%)`,
           false,
         );
-        await selectTrack(crossRef, { replace: true });
+        await selectTrack(crossTarget.ref, { replace: true });
         return;
       }
       syncVerdictByTrack.set(key, "inconclusive");
