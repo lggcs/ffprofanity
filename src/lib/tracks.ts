@@ -4,6 +4,7 @@
  */
 
 import type { SubtitleTrack, TrackSelection, Settings } from '../types';
+import { languageDisplayName } from './language';
 
 // SDH/CC indicator patterns in track labels
 const SDH_PATTERNS = [
@@ -142,6 +143,84 @@ function coverageScore(
  */
 export function trackKey(track: SubtitleTrack): string {
   return track.url || track.id;
+}
+
+// Label placeholders players produce for unlabeled text tracks
+const PLACEHOLDER_LABEL = /^(unknown|und|undefined|none|no label|)$/i;
+
+/** The source paths whose labels belong to the viewer, not to a site relay. */
+function isViewerOwnedTrack(track: SubtitleTrack): boolean {
+  const source = track.source || '';
+  return source === 'user' || source.includes('user-subtitle');
+}
+
+/** Label that is nothing but a language code token ("ENG", "sr-Latn", "ro"). */
+function bareLanguageCodeToken(label: string): string {
+  const trimmed = label.trim();
+  return /^[a-z]{2,3}$/i.test(trimmed) || /^[a-z]{2,3}[-_][A-Za-z0-9]{2,8}$/i.test(trimmed)
+    ? trimmed
+    : '';
+}
+
+/**
+ * Canonical, relay-independent labels, applied once at the single content
+ * ingestion point so every detection path labels alike. Relays disagree:
+ * native relays pass raw codes ("ENG", "HRV"), movie-access relays pass
+ * bare names, and page scripts number their own list per relay — the same
+ * file can appear as "ENG", "English" and "English 1" in one popup.
+ *  - placeholder labels and bare codes become the language display name
+ *    (from the track's language field, else from the code token itself);
+ *  - tracks sharing a known language are numbered by list order
+ *    ("English 1", "English 2", ...) exactly as one relayed site list is;
+ *  - "(a)"-style variant suffixes survive renumbering unchanged
+ *    (isVariantTrackLabel demotion depends on them);
+ *  - labels that carry a real name or marker ("English SDH") are left alone;
+ *  - user uploads and site-menu picks keep the label the viewer chose.
+ * Mutates the tracks in place; safe to run repeatedly (idempotent).
+ */
+export function canonicalizeTrackLabels(tracks: SubtitleTrack[]): void {
+  const langOf = (t: SubtitleTrack): string =>
+    normalizeLanguageCode(t.language) ||
+    normalizeLanguageCode(bareLanguageCodeToken(t.label || ''));
+  const counts = new Map<string, number>();
+  for (const t of tracks) {
+    const lang = langOf(t);
+    if (lang) {
+      counts.set(lang, (counts.get(lang) ?? 0) + 1);
+    }
+  }
+  const seq = new Map<string, number>();
+  for (const t of tracks) {
+    if (isViewerOwnedTrack(t)) continue;
+    const lang = langOf(t);
+    const name = lang ? languageDisplayName(lang) : null;
+    if (!lang || !name) continue;
+    const { base, variant } = splitVariantSuffix(t.label || '');
+    const unNumbered = base.replace(/\s+\d+$/, '').trim() || base;
+    const isPlaceholder =
+      PLACEHOLDER_LABEL.test(unNumbered) || !!bareLanguageCodeToken(unNumbered);
+    if (!isPlaceholder && unNumbered.toLowerCase() !== name.toLowerCase()) continue;
+    const n = (seq.get(lang) ?? 0) + 1;
+    seq.set(lang, n);
+    const suffix = (counts.get(lang) ?? 0) > 1 ? ` ${n}` : '';
+    t.label = `${name}${suffix}${variant ? ` ${variant}` : ''}`;
+  }
+}
+
+/**
+ * Peel a leading variant tag ("(a)" or a bare trailing a/b/c after
+ * whitespace) off a label so it can sit past the canonical number.
+ */
+function splitVariantSuffix(label: string): { base: string; variant: string } {
+  const paren = label.match(/^(.+?)\s*\(([a-c])\)$/i);
+  if (paren?.[1] && paren[2]) {
+    return { base: paren[1].trim(), variant: `(${paren[2]})` };
+  }
+  const bare = label.match(/^(.*\S)\s+([a-c])$/i);
+  if (bare?.[1] && bare[2]) {
+    return { base: bare[1].trim(), variant: bare[2].toUpperCase() };
+  }
+  return { base: label.trim(), variant: '' };
 }
 
 /**

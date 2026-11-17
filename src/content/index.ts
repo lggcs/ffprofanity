@@ -28,6 +28,7 @@ import {
   trackCoverageRatio,
   trackKey,
   calculateRecommendScore,
+  canonicalizeTrackLabels,
   normalizeLanguageCode,
   COVERAGE_ACCEPTABLE_RATIO,
 } from "../lib/tracks";
@@ -1855,6 +1856,20 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
   // Add new tracks to the list
   if (newTracks.length > 0) {
     detectedTracks.push(...newTracks);
+    // One canonical labeling pass over the merged list: raw codes and
+    // placeholder names resolve to language names, same-language tracks
+    // number as one sequence. Applied here — not in each relay — so page
+    // scripts, background extractors and native relays all label alike.
+    canonicalizeTrackLabels(detectedTracks);
+    const selected = currentTrack;
+    if (selected) {
+      // selectTrack can hand out a spread copy that is not the stored
+      // entry; keep its label in step with the canonical form.
+      const live = detectedTracks.find((t) => trackKey(t) === trackKey(selected));
+      if (live && live !== selected) {
+        selected.label = live.label;
+      }
+    }
   }
 
   // When a user upload is active, don't auto-select or force-select detected tracks

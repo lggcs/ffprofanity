@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COVERAGE_ACCEPTABLE_RATIO,
   calculateRecommendScore,
+  canonicalizeTrackLabels,
   isVariantTrackLabel,
   selectBestTrack,
   trackCoverageRatio,
@@ -169,5 +170,71 @@ describe("variant track labels", () => {
     const selection = selectBestTrack([variant], settings);
     expect(selection.track?.id).toBe("variant");
     expect(selection.autoSelected).toBe(true);
+  });
+});
+
+describe("canonicalizeTrackLabels", () => {
+  it("resolves raw codes and placeholders to language names", () => {
+    const tracks = [
+      track({ id: "n1", label: "ENG", language: "eng" }),
+      track({ id: "n2", label: "UNKNOWN", language: "unknown" }),
+      track({ id: "n3", label: "HRV", language: "" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("English");
+    // Unknown language: nothing better to call it — label stays.
+    expect(tracks[1]?.label).toBe("UNKNOWN");
+    // No language field: the code token itself still resolves.
+    expect(tracks[2]?.label).toBe("Croatian");
+  });
+
+  it("numbers one language as one sequence across relays, variants preserved", () => {
+    // The reported lookmovie2 mixture: a page-relayed variant, a movie-access
+    // relay name, and a native relay placeholder — one list, three shapes.
+    const tracks = [
+      track({ id: "v", label: "English 1 A", language: "eng" }),
+      track({ id: "p", label: "English", language: "English" }),
+      track({ id: "k", label: "UNKNOWN", language: "eng" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("English 1 A");
+    expect(tracks[1]?.label).toBe("English 2");
+    expect(tracks[2]?.label).toBe("English 3");
+    // The "(a)"-style demotion prior still applies after renumbering.
+    expect(isVariantTrackLabel(tracks[0]?.label ?? "")).toBe(true);
+
+    // Idempotent: re-running the pass must not renumber.
+    canonicalizeTrackLabels(tracks);
+    expect(tracks.map((t) => t.label)).toEqual(["English 1 A", "English 2", "English 3"]);
+  });
+
+  it("strips a page-relayed number from a lone track", () => {
+    const tracks = [track({ id: "s", label: "English 1", language: "eng" })];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("English");
+  });
+
+  it("leaves viewer-owned labels and descriptive names untouched", () => {
+    const tracks = [
+      track({ id: "u1", label: "MY MOVIE.srt", source: "user", language: "en" }),
+      track({
+        id: "p1",
+        label: "English 4",
+        source: "lookmovie.user-subtitle-selected",
+      }),
+      track({ id: "d1", label: "English SDH", language: "en" }),
+    ];
+
+    canonicalizeTrackLabels(tracks);
+
+    expect(tracks[0]?.label).toBe("MY MOVIE.srt");
+    expect(tracks[1]?.label).toBe("English 4");
+    expect(tracks[2]?.label).toBe("English SDH");
   });
 });

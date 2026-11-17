@@ -39,6 +39,8 @@ export const LANGUAGE_NAMES: Record<string, string> = {
   uk: 'Ukrainian',
   bg: 'Bulgarian',
   hr: 'Croatian',
+  mk: 'Macedonian',
+  sr: 'Serbian',
   sk: 'Slovak',
   sl: 'Slovenian',
   ms: 'Malay',
@@ -97,6 +99,17 @@ export function extractLanguageFromUrl(
 export function getLanguageName(code: string): string {
   const normalized = code.toLowerCase().slice(0, 5);
   return LANGUAGE_NAMES[normalized] || LANGUAGE_NAMES[normalized.slice(0, 2)] || code.toUpperCase();
+}
+
+/**
+ * Display name for a language code, or null when the code is unknown.
+ * Unlike getLanguageName, unknown codes are not masked as an uppercase
+ * code — callers use null as "leave the existing label alone".
+ */
+export function languageDisplayName(code: string | undefined): string | null {
+  if (!code) return null;
+  const normalized = code.toLowerCase().slice(0, 5);
+  return LANGUAGE_NAMES[normalized] || LANGUAGE_NAMES[normalized.slice(0, 2)] || null;
 }
 
 /**
