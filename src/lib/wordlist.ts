@@ -141,7 +141,6 @@ export const DEFAULT_WORDLIST = [
   "scrotum",
   "sex",
   "sexy",
-  "shag",
   "shagged",
   "shagging",
   "shit",

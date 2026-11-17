@@ -1463,4 +1463,36 @@ describe('Religious Whitelist', () => {
       }
     });
   });
+
+  // Scooby Doo movies use "Shag" as Shaggy's nickname; the bare form is a
+  // name/neutral noun far more often than it is the British vulgarism, so it
+  // is out of the default list. The near-unambiguous inflections stay.
+  describe('shag nickname false positive', () => {
+    it('does not flag the Shaggy nickname at any sensitivity', () => {
+      for (const sensitivity of ['low', 'medium', 'high'] as const) {
+        const detector = new ProfanityDetector({
+          wordlist: DEFAULT_WORDLIST,
+          sensitivity,
+        });
+        const result = detector.detect('Shag, where are you?! I got a shag carpet in the van.');
+        expect(result.matches).toEqual([]);
+        expect(result.hasProfanity).toBe(false);
+      }
+    });
+
+    it('never flags "Shaggy" itself', () => {
+      const detector = new ProfanityDetector({ wordlist: DEFAULT_WORDLIST });
+      const result = detector.detect('Shaggy, like, wow!');
+      expect(result.hasProfanity).toBe(false);
+    });
+
+    it('still catches the vulgar inflections', () => {
+      const detector = new ProfanityDetector({
+        wordlist: DEFAULT_WORDLIST,
+        useContextFiltering: false,
+      });
+      expect(detector.detect('They shagged in the back of the van.').hasProfanity).toBe(true);
+      expect(detector.detect('They were shagging the whole time.').hasProfanity).toBe(true);
+    });
+  });
 });
