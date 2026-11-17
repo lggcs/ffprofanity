@@ -63,6 +63,9 @@ export const RECONCILE_LIMITS = {
   maxPairs: 60,
 } as const;
 
+/** Gate label when the fitted rate sits outside the correction envelope. */
+export const RATE_OUT_OF_RANGE = "rate-out-of-range";
+
 /** Disagreement inside these bounds counts as "the same timebase" */
 export const NEAR_IDENTITY = {
   offsetMs: 2000,
@@ -75,6 +78,37 @@ export function isNearIdentityFit(model: { rate: number; offsetMs: number } | nu
     Math.abs(model.offsetMs) <= NEAR_IDENTITY.offsetMs &&
     Math.abs(model.rate - 1) <= NEAR_IDENTITY.rate
   );
+}
+
+/**
+ * PAL-style cross-transfer fingerprint: the displayed track can pair cleanly
+ * with every reference yet sit at a rate far outside the correction envelope
+ * (a 25-fps PAL transfer against a 23.976-fps film master fits rate ≈ 0.959).
+ * When the fits that failed ONLY the rate gate agree with each other within
+ * these tolerances — same foreign rate, same lead-in — the disagreement with
+ * the display's transfer is proven, and switching to a reference is warranted.
+ * Applying the model is not: a rate this far out must never be remapped in.
+ */
+export const CROSS_TRANSFER_RATE_CONSISTENCY = 0.001;
+export const CROSS_TRANSFER_OFFSET_CONSISTENCY_MS = 2000;
+
+export function isConsistentCrossTransfer(
+  models: Array<Pick<ReconcileModel, "rate" | "offsetMs">>,
+): boolean {
+  if (models.length < 2) return false;
+  const first = models[0];
+  if (!first) return false;
+  for (let i = 1; i < models.length; i++) {
+    const m = models[i];
+    if (!m) return false;
+    if (
+      Math.abs(m.rate - first.rate) > CROSS_TRANSFER_RATE_CONSISTENCY ||
+      Math.abs(m.offsetMs - first.offsetMs) > CROSS_TRANSFER_OFFSET_CONSISTENCY_MS
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 interface PreparedCue {
@@ -363,7 +397,7 @@ export function reconcileTracks(
     gateFailures.push("reference-truncated");
   }
   if (!Number.isFinite(model.rate) || Math.abs(model.rate - 1) > L.maxRateDeviation) {
-    gateFailures.push("rate-out-of-range");
+    gateFailures.push(RATE_OUT_OF_RANGE);
   }
   if (!Number.isFinite(model.offsetMs) || Math.abs(model.offsetMs) > L.maxOffsetMs) {
     gateFailures.push("offset-out-of-range");

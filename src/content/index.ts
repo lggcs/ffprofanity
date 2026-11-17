@@ -33,7 +33,9 @@ import {
   COVERAGE_ACCEPTABLE_RATIO,
 } from "../lib/tracks";
 import {
+  isConsistentCrossTransfer,
   isNearIdentityFit,
+  RATE_OUT_OF_RANGE,
   reconcileTracks,
   type ReconcileResult,
 } from "../lib/reconcile";
@@ -2749,6 +2751,9 @@ async function maybeSettleSyncVerdict(): Promise<void> {
   syncRefTried.set(key, tried);
   try {
     let fitted: { result: ReconcileResult; ref: SubtitleTrack } | null = null;
+    // Fits the rate gate had to reject solely on rate — raw material for the
+    // cross-transfer verdict below.
+    const crossTransferFits: Array<{ result: ReconcileResult; ref: SubtitleTrack }> = [];
     for (const ref of candidates.slice(0, SYNC_MAX_REF_ATTEMPTS)) {
       if (syncSuspended) return;
       const refUrl = ref.url;
@@ -2760,6 +2765,16 @@ async function maybeSettleSyncVerdict(): Promise<void> {
       if (result.accepted && result.model) {
         fitted = { result, ref };
         break;
+      }
+      // A clean pairing that fails ONLY the rate gate is not junk: it is a
+      // candidate cross-transfer fingerprint (verdict below).
+      if (
+        !result.accepted &&
+        result.model &&
+        result.gateFailures.length === 1 &&
+        result.gateFailures[0] === RATE_OUT_OF_RANGE
+      ) {
+        crossTransferFits.push({ result, ref });
       }
       debug(
         `Sync arbitration: fit against "${ref.label}" rejected ` +
@@ -2773,6 +2788,67 @@ async function maybeSettleSyncVerdict(): Promise<void> {
     const model = fitted?.result.model ?? null;
 
     if (!fitted || !model) {
+      const cross = crossTransferFits.filter((f) => f.result.model);
+      if (cross.length >= 2 && isConsistentCrossTransfer(cross.map((f) => f.result.model!))) {
+        // PAL-style wrong-transport case: the display pairs cleanly with the
+        // references but at a rate far outside the ±2% envelope, and every
+        // reference measured the SAME foreign rate at the same lead-in. The
+        // disagreement is then proven, so the viewer gets the reference —
+        // and never a remap: a 4% model is exactly what the rate envelope
+        // exists to refuse. Switch only; corrections stay envelope-gated.
+        syncVerdictByTrack.set(key, "odd");
+        const best = cross[0]; // candidates were score-sorted; the first fit wins the priors
+        if (!best?.result.model) {
+          syncVerdictByTrack.set(key, "inconclusive");
+          applyHeldNativeModel();
+          return;
+        }
+        const crossRef = best.ref;
+        const crossModel = best.result.model;
+        const ratePct = Math.round(Math.abs(1 - crossModel.rate) * 1000) / 10;
+        if (syncUserLocked.has(key)) {
+          showNotification(
+            "info",
+            `"${track.label}" follows a different timing master (~${ratePct}%) — keeping your pick`,
+            false,
+          );
+          applyHeldNativeModel();
+          return;
+        }
+        if (userUploadActive) return;
+        const crossCoverage = durationMs > 0 ? trackCoverageRatio(crossRef, durationMs) : null;
+        if (crossCoverage !== null && crossCoverage < COVERAGE_ACCEPTABLE_RATIO) {
+          log(
+            `Sync arbitration: keeping "${track.label}" — "${crossRef.label}" does not cover the runtime`,
+          );
+          applyHeldNativeModel();
+          return;
+        }
+        if (
+          calculateRecommendScore(crossRef, settings, scoreContext) <=
+          calculateRecommendScore(track, settings, scoreContext)
+        ) {
+          log(
+            `Sync arbitration: cross-transfer disagreement with "${crossRef.label}" but the ` +
+            "reference is not a better track — keeping the display",
+          );
+          applyHeldNativeModel();
+          return;
+        }
+        syncSwitchedAway.add(key);
+        log(
+          `Sync arbitration: every reference places "${track.label}" at rate ` +
+          `${crossModel.rate.toFixed(4)} — a different timing master; ` +
+          `switching to "${crossRef.label}" (no remap)`,
+        );
+        showNotification(
+          "info",
+          `Switched to "${crossRef.label}" — the previous track follows a different timing master (~${ratePct}%)`,
+          false,
+        );
+        await selectTrack(crossRef, { replace: true });
+        return;
+      }
       syncVerdictByTrack.set(key, "inconclusive");
       applyHeldNativeModel();
       return;

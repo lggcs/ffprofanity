@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isNearIdentityFit, reconcileTracks } from "../src/lib/reconcile";
+import {
+  isConsistentCrossTransfer,
+  isNearIdentityFit,
+  RATE_OUT_OF_RANGE,
+  reconcileTracks,
+} from "../src/lib/reconcile";
 import type { CueLike } from "../src/lib/drift";
 
 // Deterministic jitter so fixtures are stable across runs:
@@ -98,5 +103,99 @@ describe("reconcileTracks", () => {
     const result = reconcileTracks(MISTIMED_FULL, REFERENCE.slice(0, 8));
     expect(result.accepted).toBe(false);
     expect(result.gateFailures).toContain("reference-truncated");
+  });
+});
+
+describe("isConsistentCrossTransfer", () => {
+  it("accepts two fits at the same foreign rate and lead-in", () => {
+    // The real lookmovie2 PAL pair: several references all measured ~0.959
+    // (25-fps transfer against a 23.976-fps film master), offsets within 0.5 s.
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959009, offsetMs: -2399 },
+        { rate: 0.958996, offsetMs: -2316 },
+      ]),
+    ).toBe(true);
+  });
+
+  it("requires at least two fits", () => {
+    expect(isConsistentCrossTransfer([{ rate: 0.959, offsetMs: -2399 }])).toBe(false);
+    expect(isConsistentCrossTransfer([])).toBe(false);
+  });
+
+  it("rejects fits that disagree on rate or lead-in", () => {
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2399 },
+        { rate: 0.97, offsetMs: -2399 },
+      ]),
+    ).toBe(false);
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2399 },
+        { rate: 0.959, offsetMs: -4400 },
+      ]),
+    ).toBe(false);
+  });
+
+  it("stays consistent inside the tolerances and inconsistent past them", () => {
+    // Rates 0.0005 apart — clearly inside the 0.001 rate tolerance.
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2000 },
+        { rate: 0.9595, offsetMs: -2000 },
+      ]),
+    ).toBe(true);
+    // Lead-in exactly 2000 ms apart — on the bound, still consistent.
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2000 },
+        { rate: 0.959, offsetMs: 0 },
+      ]),
+    ).toBe(true);
+    // One millisecond past the lead-in bound breaks consistency.
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2000 },
+        { rate: 0.959, offsetMs: 1 },
+      ]),
+    ).toBe(false);
+    // 0.002 apart is a fifth past the rate tolerance — no longer the same
+    // foreign master.
+    expect(
+      isConsistentCrossTransfer([
+        { rate: 0.959, offsetMs: -2000 },
+        { rate: 0.961, offsetMs: -2000 },
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("PAL cross-transfer, end to end", () => {
+  // A 25-fps PAL transfer against a 23.976-fps film master: the display runs
+  // ~4.3% fast — far outside the ±2% correction envelope, yet every cue
+  // pairs cleanly and the residuals stay tiny.
+  const RATE = 0.959;
+  const OFFSET_MS = -2399;
+  const PAL_TIMED = REFERENCE.map((cue) => {
+    const startMs = Math.round(cue.startMs * RATE) + OFFSET_MS;
+    return { ...cue, startMs, endMs: startMs + 2200 };
+  });
+
+  it("pairs cleanly but is rejected solely on rate, keeping a usable model", () => {
+    const result = reconcileTracks(PAL_TIMED, REFERENCE);
+    expect(result.accepted).toBe(false);
+    expect(result.gateFailures).toEqual([RATE_OUT_OF_RANGE]);
+    expect(result.model!.rate).toBeCloseTo(RATE, 3);
+    expect(result.medianResidualMs).toBeLessThan(250);
+  });
+
+  it("marks the disagreement proven when a second reference fits the same rate", () => {
+    const shifted = REFERENCE.map((cue) => ({ ...cue, startMs: cue.startMs + 500 }));
+    const first = reconcileTracks(PAL_TIMED, REFERENCE);
+    const second = reconcileTracks(PAL_TIMED, shifted);
+    expect(first.gateFailures).toEqual([RATE_OUT_OF_RANGE]);
+    expect(second.gateFailures).toEqual([RATE_OUT_OF_RANGE]);
+    expect(isConsistentCrossTransfer([first.model!, second.model!])).toBe(true);
   });
 });
