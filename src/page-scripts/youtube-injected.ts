@@ -32,6 +32,21 @@ export function youTubePageScript(): void {
   const sentSubtitleUrls = new Set<string>();
   const capturedTimedtext: Map<string, string> = new Map();
 
+  // The addon keeps YouTube captions on so the player's timedtext stream —
+  // the capture source below — never stops. The only sanctioned off-switch
+  // is the viewer clicking Disable in the addon popup; the content script
+  // broadcasts that state (FFPROFANITY_CC_DISABLED) and answers our init
+  // query for it.
+  let ccDisabledByUser = false;
+
+  function resetCaptionFlags(): void {
+    const w = window as any;
+    delete w.__ffprofanity_caption_triggered;
+    delete w.__ffprofanity_caption_attempts;
+    delete w.__ffprofanity_caption_retries;
+    delete w.__ffprofanity_caption_inflight;
+  }
+
   // The background injects this script at onCommitted — often before the
   // content script has attached its message listener — and its own retry
   // dedup means a message sent into the void is never sent again. Buffer
@@ -68,8 +83,25 @@ export function youTubePageScript(): void {
 
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.source !== window) return;
-    if ((e.data as { type?: string } | null)?.type !== "FFPROFANITY_RELAY_READY") return;
-    markRelayReady();
+    const data = e.data as { type?: string; disabled?: boolean } | null;
+    if (!data?.type) return;
+    if (data.type === "FFPROFANITY_RELAY_READY") {
+      markRelayReady();
+      return;
+    }
+    if (data.type === "FFPROFANITY_CC_DISABLED") {
+      ccDisabledByUser = data.disabled === true;
+      log(
+        "Addon state from content script:",
+        ccDisabledByUser ? "disabled — captions left to the viewer" : "enabled — captions stay on",
+      );
+      // Popup re-enable mid-session: re-arm captions right away instead of
+      // waiting for the next navigation.
+      if (!ccDisabledByUser) {
+        resetCaptionFlags();
+        setTimeout(tryEnableCaptions, 300);
+      }
+    }
   });
 
   // A READY posted before this script existed is gone; the DOM attribute
@@ -464,8 +496,20 @@ export function youTubePageScript(): void {
         log("Navigation detected, re-extracting subtitles");
         sentSubtitleUrls.clear();
         capturedTimedtext.clear();
-        setTimeout(extractFromInitialPlayerResponse, 500);
-        setTimeout(extractFromInitialPlayerResponse, 2000);
+        // The new video's player response can land seconds after the finished
+        // navigation; the old two-shot schedule missed it, capture stayed
+        // dark until a manual CC click. Replay the load-time schedule.
+        for (const delay of [100, 500, 1000, 2000, 3000, 5000]) {
+          setTimeout(extractFromInitialPlayerResponse, delay);
+        }
+        // Caption enabling is otherwise one-shot per page load: the triggered
+        // flag latched forever, so from the second SPA video the script never
+        // re-enabled CC and the timedtext stream died with it. Re-arm per
+        // video; the addon rule is captions on unless the popup Disable.
+        if (!ccDisabledByUser) {
+          resetCaptionFlags();
+          setTimeout(tryEnableCaptions, 800);
+        }
       }
     };
 
@@ -529,86 +573,116 @@ export function youTubePageScript(): void {
     }, true);
   }
 
+  // The addon forces captions on — the player's timedtext stream is the
+  // capture source — and only a popup Disable may leave them alone. Synthetic
+  // clicks on the CC button were verified unanswered on-device (the button
+  // stays inert until caption data mounts — aria-pressed never flips), so the
+  // player's captions module is toggled directly, and every attempt is
+  // verified against the button state and retried a bounded number of times.
+  const CAPTION_RETRY_DELAYS_MS = [1200, 2500, 4000, 6000, 8000, 10000];
+
+  function captionsReportOn(): boolean {
+    return (
+      document
+        .querySelector(".ytp-subtitles-button")
+        ?.getAttribute("aria-pressed") === "true"
+    );
+  }
+
+  function armCaptionsSuccess(): void {
+    const w = window as any;
+    w.__ffprofanity_caption_triggered = true;
+    delete w.__ffprofanity_caption_inflight;
+    setTimeout(() => extractFromInitialPlayerResponse(), 500);
+  }
+
+  function verifyCaptionsEnabled(stage: string): void {
+    const w = window as any;
+    if (ccDisabledByUser) {
+      delete w.__ffprofanity_caption_inflight;
+      return;
+    }
+    if (captionsReportOn()) {
+      log(`Captions verified on (${stage}) — arming capture`);
+      armCaptionsSuccess();
+      return;
+    }
+    delete w.__ffprofanity_caption_inflight;
+    const retries = w.__ffprofanity_caption_retries || 0;
+    if (retries >= CAPTION_RETRY_DELAYS_MS.length) {
+      log("Caption enable retries exhausted — leaving captions as they are");
+      return;
+    }
+    const delay = CAPTION_RETRY_DELAYS_MS[retries];
+    w.__ffprofanity_caption_retries = retries + 1;
+    log(`Captions still off after ${stage} — retrying in ${delay ?? 3000}ms`);
+    setTimeout(() => tryEnableCaptions(), delay ?? 3000);
+  }
+
   function tryEnableCaptions(): void {
-    const ccButton = document.querySelector(".ytp-subtitles-button") as HTMLButtonElement | null;
-    const buttonUsable =
-      !!ccButton &&
-      getComputedStyle(ccButton).display !== "none" &&
-      ccButton.getClientRects().length > 0;
-
-    if (buttonUsable && ccButton) {
-      const isEnabled = ccButton.getAttribute("aria-pressed") === "true";
-
-      if (isEnabled) {
-        log("Captions already enabled, timedtext should be loading");
-        const ypr = (window as any).ytInitialPlayerResponse;
-        const captionTracks = ypr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        if (!captionTracks || captionTracks.length === 0) {
-          if ((window as any).__ffprofanity_caption_toggled) {
-            log("Live stream: No caption tracks available after toggle");
-            return;
-          }
-          log("Live stream with no tracks - toggling captions to trigger timedtext");
-          (window as any).__ffprofanity_caption_toggled = true;
-          ccButton.click();
-          setTimeout(() => {
-            ccButton.click();
-            setTimeout(() => extractFromInitialPlayerResponse(), 500);
-          }, 100);
-          return;
-        }
-        return;
-      }
-
-      if ((window as any).__ffprofanity_caption_triggered) {
-        log("Already tried enabling captions");
-        return;
-      }
-      (window as any).__ffprofanity_caption_triggered = true;
-
-      log("Clicking CC button to trigger caption loading");
-      ccButton.click();
-
-      setTimeout(() => {
-        const tracks = document.querySelectorAll("track");
-        log("After CC click, found", tracks.length, "track elements");
-        extractFromInitialPlayerResponse();
-      }, 1000);
+    if (ccDisabledByUser) {
+      log("Addon disabled from popup — leaving captions untouched");
       return;
     }
-
-    // Shorts keeps the CC button display:none — aria-pressed stays false and
-    // a click on it does nothing, so drive the player's captions module
-    // directly to make the player fetch timedtext for our interception.
-    if ((window as any).__ffprofanity_caption_triggered) {
-      log("Already tried enabling captions");
+    if (captionsReportOn()) {
+      if (!(window as any).__ffprofanity_caption_triggered) {
+        log("Captions already on — arming capture");
+        armCaptionsSuccess();
+      }
       return;
     }
+    // Retries already gave up for this video — navigation re-arms them.
+    if ((window as any).__ffprofanity_caption_retries >= CAPTION_RETRY_DELAYS_MS.length) {
+      return;
+    }
+    // One attempt at a time: the load timers, the MutationObserver, the
+    // post-navigation re-arm and the popup-enable broadcast all funnel here.
+    if ((window as any).__ffprofanity_caption_inflight) return;
+    (window as any).__ffprofanity_caption_inflight = true;
+
     const player = getLivePlayer();
-    // #movie_player is a stub until Shorts mounts the real player; one
-    // attempt must not be wasted toggling it, so retry until the API is wired.
+    // #movie_player is a stub until the real player mounts; one attempt must
+    // not be wasted toggling it, so retry until the API is wired.
     if (!player?.getVideoData?.()?.video_id) {
       const attempts = (window as any).__ffprofanity_caption_attempts || 0;
-      if (attempts >= 20) return;
+      if (attempts >= 20) {
+        verifyCaptionsEnabled("player readiness");
+        return;
+      }
       (window as any).__ffprofanity_caption_attempts = attempts + 1;
       log("Player API not ready for caption toggle, retrying");
+      delete (window as any).__ffprofanity_caption_inflight;
       setTimeout(tryEnableCaptions, 1000);
       return;
     }
-    (window as any).__ffprofanity_caption_triggered = true;
 
-    log("CC button hidden or absent — enabling captions via player API");
+    // The button attribute still reports the captions state; a blind toggle
+    // would switch captions OFF when they were already on.
+    const pressed = document
+      .querySelector(".ytp-subtitles-button")
+      ?.getAttribute("aria-pressed");
+    if (pressed === "true") {
+      log("Captions already enabled — timedtext should be loading");
+      verifyCaptionsEnabled("player API check");
+      return;
+    }
+
+    log("Enabling captions via player API");
     try {
       player.loadModule("captions");
       player.toggleSubtitles();
     } catch (e) {
       log("Player API caption toggle failed:", e);
     }
-    setTimeout(() => extractFromInitialPlayerResponse(), 1000);
+    verifyCaptionsEnabled("player API pass");
   }
 
   function init(): void {
     log("YouTube extractor initialized via MAIN world injection");
+
+    // Ask for the popup disable state in case this script attached after the
+    // content script broadcast it (either one covers the load-order race).
+    window.postMessage({ type: "FFPROFANITY_CC_STATE_QUERY" }, "*");
 
     if (document.readyState === "complete" || document.readyState === "interactive") {
       extractFromInitialPlayerResponse();

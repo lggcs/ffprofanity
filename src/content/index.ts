@@ -652,6 +652,10 @@ async function init(): Promise<void> {
     startMonitoring();
   }
 
+  // Initial CC-state broadcast: the page script may have missed the earlier
+  // proactive one, or the popup may have re-enabled the session before load.
+  broadcastCcStateToPage();
+
   log("Content script ready");
 }
 
@@ -912,6 +916,29 @@ function flushDeferredSubtitleMessages(): void {
     handleInterceptedMessage({ source: window, data } as unknown as MessageEvent);
   }
 }
+
+/**
+ * Tell the page script (MAIN world) whether the viewer disabled the addon via
+ * the popup. The page script re-arms YouTube's CC button per video so the
+ * timedtext stream our intercept lives on never stops — captions may only be
+ * left alone when the addon itself is explicitly disabled.
+ */
+function broadcastCcStateToPage(): void {
+  try {
+    window.postMessage({ type: "FFPROFANITY_CC_DISABLED", disabled: !isActive }, "*");
+  } catch {
+    // Page world not reachable
+  }
+}
+
+// Answer the page script's init query for the popup disable state. Together
+// with the proactive broadcasts below, one of the two paths lands whichever
+// way the two scripts' load order went.
+window.addEventListener("message", (e) => {
+  if (e.source !== window) return;
+  if ((e.data as { type?: string } | null)?.type !== "FFPROFANITY_CC_STATE_QUERY") return;
+  broadcastCcStateToPage();
+});
 
 /**
  * Handle intercepted subtitle data from injected script
@@ -4294,6 +4321,7 @@ function handleStorageChange(
         isActive = false;
         stopMonitoring();
       }
+      broadcastCcStateToPage();
     }
 
     // Manual offset move takes over from auto-sync: the user is trimming
@@ -4451,11 +4479,13 @@ async function handleMessage(message: unknown): Promise<unknown> {
     case "enable":
       isActive = true;
       startMonitoring();
+      broadcastCcStateToPage();
       break;
 
     case "disable":
       isActive = false;
       stopMonitoring();
+      broadcastCcStateToPage();
       break;
 
     case "getStatus":
