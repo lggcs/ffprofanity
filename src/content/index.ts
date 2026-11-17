@@ -516,6 +516,15 @@ function setupSpaVideoChangeReset(): void {
     // we could call a video change (e.g. YouTube browse pages, other sites).
     if (!nowVid && !lastVideoId) return;
     if (nowVid && nowVid === lastVideoId) return;
+    // A capture relay can outrun this reset — extraction replays 100ms after
+    // navigation while the finish debounce waits 120ms — so the committed cue
+    // set may already belong to the video the URL names. Clearing it would
+    // lose that capture until a page refresh; keep the fresh cues instead.
+    if (nowVid && nowVid === lastCuesVideoId) {
+      lastVideoId = nowVid;
+      debug(`Video change to ${nowVid}: fresh capture already committed — keeping cues`);
+      return;
+    }
     log(`Video change via ${why}: resetting session state`);
     lastVideoId = nowVid;
     // The video just changed: a fresh capture must arm before the next
@@ -1004,6 +1013,24 @@ window.addEventListener("message", (e) => {
   broadcastCcStateToPage();
 });
 
+// The video Id the last committed capture belongs to. The session reset that
+// fires on detected navigation must not clear cues that already match the
+// URL's video: the extraction replay can outrun the debounced reset, and the
+// page-side dedup would never re-send the capture that was just cleared.
+let lastCuesVideoId: string | null = null;
+
+function relayVideoIdOf(data: Record<string, unknown>): string | null {
+  try {
+    if (typeof data.videoId === "string" && data.videoId) return data.videoId;
+    if (typeof data.url === "string" && data.url) {
+      return new URL(data.url).searchParams.get("v");
+    }
+  } catch {
+    // Unparseable URL — treat as unstamped
+  }
+  return null;
+}
+
 /**
  * Handle intercepted subtitle data from injected script
  * Handles three message types:
@@ -1101,6 +1128,9 @@ function handleInterceptedMessage(event: MessageEvent): void {
       return;
     }
 
+    const relayVid = relayVideoIdOf(data);
+    if (relayVid) lastCuesVideoId = relayVid;
+
     log(
       `Captured timedtext content: ${content?.length || 0} bytes for ${language} (video: ${videoId})`,
     );
@@ -1169,6 +1199,9 @@ function handleInterceptedMessage(event: MessageEvent): void {
     log(
       `Received subtitle content from ${source}: ${content?.length || 0} bytes for ${language}`,
     );
+
+    const relayVid = relayVideoIdOf(data);
+    if (relayVid) lastCuesVideoId = relayVid;
 
     // Track the URL so we don't double-fetch it when track metadata arrives
     if (url) {

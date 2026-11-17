@@ -32,6 +32,20 @@ export function youTubePageScript(): void {
   const sentSubtitleUrls = new Set<string>();
   const capturedTimedtext: Map<string, string> = new Map();
 
+  // Video Ids that produced a real relay (fetched content or captured
+  // timedtext) — the capture watchdog stops probing once the current video's
+  // Id is marked, and navigation clears the set.
+  const relaySucceededVids = new Set<string>();
+
+  function stampRelayVid(url: string): void {
+    try {
+      const vid = new URL(url).searchParams.get("v");
+      if (vid) relaySucceededVids.add(vid);
+    } catch {
+      // Unparseable URL — nothing to stamp
+    }
+  }
+
   // The addon keeps YouTube captions on so the player's timedtext stream —
   // the capture source below — never stops. The only sanctioned off-switch
   // is the viewer clicking Disable in the addon popup; the content script
@@ -183,6 +197,7 @@ export function youTubePageScript(): void {
       }
 
       log("Emitting captured subtitle:", videoId, lang, "isAsr:", isAsr, "bytes:", content.length);
+      if (videoId) relaySucceededVids.add(videoId);
 
       relayPost(
         {
@@ -300,6 +315,7 @@ export function youTubePageScript(): void {
     const cached = capturedTimedtext.get(url);
     if (cached) {
       log("Using cached timedtext for", language);
+      stampRelayVid(url);
       relayPost(
         {
           type: "FFPROFANITY_SUBTITLE_CONTENT",
@@ -340,6 +356,7 @@ export function youTubePageScript(): void {
 
         log("Fetched", text.length, "bytes for", language);
         capturedTimedtext.set(url, text);
+        stampRelayVid(url);
 
         relayPost(
           {
@@ -496,6 +513,7 @@ export function youTubePageScript(): void {
         log("Navigation detected, re-extracting subtitles");
         sentSubtitleUrls.clear();
         capturedTimedtext.clear();
+        relaySucceededVids.clear();
         // The new video's player response can land seconds after the finished
         // navigation; the old two-shot schedule missed it, capture stayed
         // dark until a manual CC click. Replay the load-time schedule.
@@ -542,6 +560,7 @@ export function youTubePageScript(): void {
       () => {
         sentSubtitleUrls.clear();
         capturedTimedtext.clear();
+        relaySucceededVids.clear();
       },
       true,
     );
@@ -698,6 +717,18 @@ export function youTubePageScript(): void {
     setupNavigationWatcher();
     setupResponseWatcher();
     setupCaptionButtonListener();
+
+    // A playlist transition can mount the new player response after the
+    // finite 100→5000ms extraction replay has run, leaving no cues until a
+    // page refresh. Probe every 2s while the current video has produced
+    // neither fetched content nor captured timedtext; extraction is deduped
+    // (sentSubtitleUrls) and stale-response guarded, so a capture for the
+    // current video marks it in relaySucceededVids and the probing stops.
+    setInterval(() => {
+      const currentVid = getCurrentVideoId();
+      if (!currentVid || relaySucceededVids.has(currentVid)) return;
+      extractFromInitialPlayerResponse();
+    }, 2000);
 
     const videoObserver = new MutationObserver(() => {
       const video = document.querySelector("video");
