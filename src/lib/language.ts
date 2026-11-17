@@ -53,7 +53,89 @@ export const LANGUAGE_NAMES: Record<string, string> = {
   lt: 'Lithuanian',
   lv: 'Latvian',
   et: 'Estonian',
+  // ISO 639-2/B and regional code forms that relay language fields and
+  // hashed caption URLs actually deliver; missing keys would be masked as
+  // uppercase codes ("SCC") or truncate into the wrong language.
+  scc: 'Serbian (Cyrillic)',
+  sc: 'Serbian (Cyrillic)',
+  scr: 'Croatian',
+  slk: 'Slovak',
+  slo: 'Slovak',
+  rum: 'Romanian',
+  ell: 'Greek',
+  gre: 'Greek',
+  eng: 'English',
+  spa: 'Spanish',
+  fre: 'French',
+  fra: 'French',
+  ger: 'German',
+  deu: 'German',
+  por: 'Portuguese',
+  ita: 'Italian',
+  jpn: 'Japanese',
+  chi: 'Chinese',
+  nld: 'Dutch',
+  dut: 'Dutch',
+  pol: 'Polish',
+  swe: 'Swedish',
+  tur: 'Turkish',
+  ind: 'Indonesian',
+  per: 'Persian',
+  bul: 'Bulgarian',
+  ces: 'Czech',
+  cze: 'Czech',
+  sq: 'Albanian',
+  sqi: 'Albanian',
+  alb: 'Albanian',
+  bs: 'Bosnian',
+  bos: 'Bosnian',
+  is: 'Icelandic',
+  ice: 'Icelandic',
+  isl: 'Icelandic',
+  ka: 'Georgian',
+  kat: 'Georgian',
+  hy: 'Armenian',
+  hye: 'Armenian',
+  arm: 'Armenian',
+  be: 'Belarusian',
+  bel: 'Belarusian',
+  ca: 'Catalan',
+  cat: 'Catalan',
+  eu: 'Basque',
+  eus: 'Basque',
+  baq: 'Basque',
+  gl: 'Galician',
+  glg: 'Galician',
+  ga: 'Irish',
+  gle: 'Irish',
+  cy: 'Welsh',
+  cym: 'Welsh',
+  nb: 'Norwegian',
+  nn: 'Norwegian (Nynorsk)',
+  nno: 'Norwegian (Nynorsk)',
+  fil: 'Filipino',
+  srp: 'Serbian',
+  hrv: 'Croatian',
+  mkd: 'Macedonian',
+  hun: 'Hungarian',
+  ron: 'Romanian',
+  ukr: 'Ukrainian',
+  ara: 'Arabic',
+  tha: 'Thai',
+  vie: 'Vietnamese',
+  rus: 'Russian',
 };
+
+// Full-word lookup by display name: relay language fields sometimes carry
+// the name itself ("Croatian", "Slovak") instead of a code, where 2-char
+// truncation would miss the word entirely or hit the wrong language
+// ("Slovak" → "sl" → Slovenian).
+const LANGUAGE_NAME_BY_FORM = new Map<string, string>();
+for (const name of Object.values(LANGUAGE_NAMES)) {
+  if (!LANGUAGE_NAME_BY_FORM.has(name.toLowerCase())) {
+    LANGUAGE_NAME_BY_FORM.set(name.toLowerCase(), name);
+  }
+}
 
 /**
  * Extract language code from subtitle URL or data object
@@ -97,19 +179,28 @@ export function extractLanguageFromUrl(
  * Convert language code to display name
  */
 export function getLanguageName(code: string): string {
-  const normalized = code.toLowerCase().slice(0, 5);
-  return LANGUAGE_NAMES[normalized] || LANGUAGE_NAMES[normalized.slice(0, 2)] || code.toUpperCase();
+  return languageDisplayName(code) || code.toUpperCase();
 }
 
 /**
  * Display name for a language code, or null when the code is unknown.
  * Unlike getLanguageName, unknown codes are not masked as an uppercase
  * code — callers use null as "leave the existing label alone".
+ * Lookup order: direct map key (2–3 letter codes and their ISO 639-2/B
+ * forms), then the 2-char prefix — gated to code-shaped inputs so a full
+ * word like "Slovak" does not truncate into "sl" and hit Slovenian — and
+ * finally the reverse lookup for relays that carry the name itself.
  */
 export function languageDisplayName(code: string | undefined): string | null {
   if (!code) return null;
   const normalized = code.toLowerCase().slice(0, 5);
-  return LANGUAGE_NAMES[normalized] || LANGUAGE_NAMES[normalized.slice(0, 2)] || null;
+  const direct = LANGUAGE_NAMES[normalized];
+  if (direct) return direct;
+  if (code.length <= 3 || code.includes('-')) {
+    const prefix = LANGUAGE_NAMES[normalized.slice(0, 2)];
+    if (prefix) return prefix;
+  }
+  return LANGUAGE_NAME_BY_FORM.get(code.toLowerCase().trim()) ?? null;
 }
 
 /**
