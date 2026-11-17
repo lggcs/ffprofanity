@@ -146,8 +146,10 @@ function clampRate(rate: number): number {
   return Math.min(hi, Math.max(lo, rate));
 }
 
-/** Compute least-squares rate/offset for pairs (x=videoMs, y=subMs) */
-function fitAffine(points: Array<{ x: number; y: number }>): { rate: number; offset: number } | null {
+/** Compute least-squares rate/offset for pairs (x=videoMs, y=subMs).
+ * Also reused by reconcile.ts, which fits the same transform between two
+ * subtitle tracks. */
+export function fitAffine(points: Array<{ x: number; y: number }>): { rate: number; offset: number } | null {
   const n = points.length;
   const first = points[0];
   if (n === 0 || !first) return null;

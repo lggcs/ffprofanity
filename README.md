@@ -14,6 +14,12 @@ A Firefox WebExtension that automatically detects profanity in subtitles, mutes 
 - **Audio Control**: Automatically mute the tab when profanity is detected
 - **Censored Overlay**: Display subtitles with profanity replaced by `[CENSORED]` or fun alternatives
 - **Timing Sync**: Adjust subtitle timing with real-time preview
+- **Track Sync Arbitration**: Variant releases (`English 1 A`, `English (a)`) are
+  demoted in auto-selection, and when the displayed track demonstrably disagrees
+  with a same-language alternative (verified by cross-matching their cue text,
+  ≤2 reference fetches per track, nothing persisted) the extension switches to
+  the better-synced one and ignores native-player correction models that would
+  undo it. Automatic timing never overrides a track the viewer picked explicitly.
 - **Privacy-First**: All processing happens locally in your browser
 
 ## Supported Sites

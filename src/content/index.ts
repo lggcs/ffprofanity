@@ -27,8 +27,15 @@ import {
   createTrackFromUser,
   trackCoverageRatio,
   trackKey,
+  calculateRecommendScore,
+  normalizeLanguageCode,
   COVERAGE_ACCEPTABLE_RATIO,
 } from "../lib/tracks";
+import {
+  isNearIdentityFit,
+  reconcileTracks,
+  type ReconcileResult,
+} from "../lib/reconcile";
 import {
   scanPageForTracks,
   extractFromPageScripts,
@@ -141,6 +148,33 @@ let coverageUpgradeAttempts = 0;
 let coverageUpgradeInProgress = false;
 // An explicit pick by the viewer outranks the automatic coverage search.
 let coverageUpgradeSuspended = false;
+
+// ==================== Cross-track sync arbitration ====================
+// Session-scoped decision about whether the displayed track's timeline is
+// the odd one out, by text-matching its cues against one other same-language
+// track fetched from the site. Nothing is persisted: verdicts, fetched
+// reference content and switch marks are rebuilt on every visit.
+// Verdicts:
+//   aligned — the reference agrees with the display: same timebase. Native
+//             (player caption file) drift models on this track are the
+//             player chasing its own file's error — suppressed.
+//   odd     — the display disagrees with the reference: switch when the
+//             reference has the better track prior, otherwise keep the
+//             display and let native-pairing models correct it.
+//   inconclusive — no confident fit; keep today's behavior, no switch.
+// The viewer's explicit track pick (coverageUpgradeSuspended) suspends all
+// of it: their ear decides which track plays and how it is corrected.
+const syncVerdictByTrack = new Map<string, "aligned" | "odd" | "inconclusive">();
+const syncPendingKeys = new Set<string>();
+const syncRefTried = new Map<string, Set<string>>();
+const syncRefCueCache = new Map<string, Cue[]>();
+const syncSwitchedAway = new Set<string>();
+const syncNativeSuppressed = new Set<string>();
+/** Reference fetches per displayed track per session (bandwidth bound) */
+const SYNC_MAX_REF_ATTEMPTS = 2;
+const SYNC_REF_CACHE_MAX = 8;
+const SYNC_MIN_CUES = 30;
+const SYNC_MIN_REF_CUES = 10;
 
 function videoDurationMs(): number {
   const duration = videoElement?.duration;
@@ -363,6 +397,15 @@ async function resetSessionForVideoChange(): Promise<void> {
   coverageRejected.clear();
   coverageUpgradeAttempts = 0;
   coverageUpgradeInProgress = false;
+
+  // Sync arbitration is per-video (session-scoped): verdicts, fetched
+  // reference content and switched-away marks never carry across videos.
+  syncVerdictByTrack.clear();
+  syncPendingKeys.clear();
+  syncRefTried.clear();
+  syncRefCueCache.clear();
+  syncSwitchedAway.clear();
+  syncNativeSuppressed.clear();
 
   if (overlayContainer) {
     const cueEl = overlayContainer.querySelector<HTMLElement>(".ffprofanity-cue");
@@ -1841,7 +1884,11 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     // fuller one took over, honouring the re-announcement would swap the
     // viewer back onto the truncated file for the rest of the movie.
     const isExplicitUserPick = (trackToSelect.source || "").includes("user-subtitle");
-    if (!isExplicitUserPick && coverageRejected.has(trackKey(trackToSelect))) {
+    if (
+      !isExplicitUserPick &&
+      (coverageRejected.has(trackKey(trackToSelect)) ||
+        syncSwitchedAway.has(trackKey(trackToSelect)))
+    ) {
       log(
         `Ignoring re-announced partial track: ${trackToSelect.label} (already replaced)`,
       );
@@ -1856,6 +1903,11 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     }
     if (isExplicitUserPick) {
       coverageUpgradeSuspended = true;
+      // The viewer's pick is final: drop every sync-arbitration verdict so
+      // automatic machinery never overrides the track they chose.
+      syncVerdictByTrack.clear();
+      syncNativeSuppressed.clear();
+      syncPendingKeys.clear();
     }
 
     const existingTrack = detectedTracks.find(
@@ -2563,6 +2615,205 @@ async function saveDriftRecord(): Promise<void> {
   }
 }
 
+// ==================== Cross-track sync arbitration ====================
+
+/** A model that actually moves the display (not the identity no-op) */
+function isNonTrivialModel(model: DriftModel | null): boolean {
+  return !!model && (model.rate !== 1 || Math.abs(model.offsetMs) > 500);
+}
+
+/**
+ * Release a drift model that was held during arbitration and now has a
+ * verdict that allows it. Called after the sync verdict settles on an
+ * outcome other than "aligned".
+ */
+function applyHeldNativeModel(): void {
+  if (!isNonTrivialModel(driftCorrector.current)) return;
+  applyDriftModelToIndex();
+  cueIndex.build(cues);
+  void saveDriftRecord();
+}
+
+/**
+ * Automatic timing actions may run only while the viewer has not taken
+ * direct control. An explicit track pick (popup or the site's own menu)
+ * suspends everything — the viewer's ear is the final authority on which
+ * track plays and how it is corrected.
+ */
+function autoTimingAllowed(track: SubtitleTrack): boolean {
+  return (
+    autoDriftEnabled &&
+    driftEnabled &&
+    settings.autoSelectTrack &&
+    !userUploadActive &&
+    !coverageUpgradeSuspended &&
+    track.source !== "user" &&
+    !!track.url &&
+    !isStreamingTrackSource(track)
+  );
+}
+
+/** Fetch and parse a reference track's cues, cached for the session. */
+async function loadSyncReferenceCues(url: string): Promise<Cue[] | null> {
+  const cached = syncRefCueCache.get(url);
+  if (cached) return cached;
+  try {
+    const content = await fetchSubtitleContent(url);
+    const parsed: ParseResult = parseSubtitle(content);
+    if (parsed.cues.length < SYNC_MIN_REF_CUES) return null;
+    if (syncRefCueCache.size >= SYNC_REF_CACHE_MAX) {
+      const oldest = syncRefCueCache.keys().next();
+      if (!oldest.done) syncRefCueCache.delete(oldest.value);
+    }
+    syncRefCueCache.set(url, parsed.cues);
+    return parsed.cues;
+  } catch (err) {
+    debug("Sync arbitration: reference fetch failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Compare the displayed track's timeline against one other same-language
+ * track (≤ 2 fetches per displayed track per session) and act on the
+ * verdict: switch to the reference when it wins on priors, or veto
+ * native-pairing drift models that contradict it. Every action is gated;
+ * when nothing is certain, nothing changes.
+ */
+async function maybeSettleSyncVerdict(): Promise<void> {
+  const track = currentTrack;
+  if (!track || !track.url) return;
+  const key = trackKey(track);
+  if (syncVerdictByTrack.has(key) || syncPendingKeys.has(key)) return;
+  if (!autoTimingAllowed(track)) return;
+  if (baseCues.length < SYNC_MIN_CUES) return;
+
+  // A truncated track is on its way to being replaced by the coverage
+  // machinery; judge timing once its final pick is in.
+  const durationMs = videoDurationMs();
+  const scoreContext = { videoDurationMs: durationMs || undefined };
+  if (durationMs > 0) {
+    const ratio = trackCoverageRatio(track, durationMs);
+    if (ratio !== null && ratio < COVERAGE_ACCEPTABLE_RATIO) return;
+  }
+
+  const lang = normalizeLanguageCode(track.language);
+  if (!lang) return;
+  const tried = syncRefTried.get(key) ?? new Set<string>();
+  const candidates = detectedTracks
+    .filter((t) =>
+      t.source !== "user" &&
+      !!t.url &&
+      trackKey(t) !== key &&
+      !isStreamingTrackSource(t) &&
+      !isForeignVideoTrackUrl(t.url) &&
+      !syncSwitchedAway.has(trackKey(t)) &&
+      !tried.has(trackKey(t)) &&
+      normalizeLanguageCode(t.language) === lang)
+    .sort(
+      (a, b) =>
+        calculateRecommendScore(b, settings, scoreContext) -
+        calculateRecommendScore(a, settings, scoreContext),
+    );
+  if (candidates.length === 0) return;
+
+  syncPendingKeys.add(key);
+  syncRefTried.set(key, tried);
+  try {
+    let fitted: { result: ReconcileResult; ref: SubtitleTrack } | null = null;
+    for (const ref of candidates.slice(0, SYNC_MAX_REF_ATTEMPTS)) {
+      if (coverageUpgradeSuspended) return;
+      const refUrl = ref.url;
+      if (!refUrl) continue;
+      tried.add(trackKey(ref));
+      const refCues = await loadSyncReferenceCues(refUrl);
+      if (!refCues || refCues.length < SYNC_MIN_REF_CUES) continue;
+      const result = reconcileTracks(baseCues, refCues);
+      if (result.accepted && result.model) {
+        fitted = { result, ref };
+        break;
+      }
+      debug(
+        `Sync arbitration: fit against "${ref.label}" rejected ` +
+        `(${result.gateFailures.join(", ") || "no model"})`,
+      );
+    }
+
+    // The session may have moved on while the fetches ran.
+    const settledTrack = currentTrack;
+    if (!settledTrack || trackKey(settledTrack) !== key) return;
+    const model = fitted?.result.model ?? null;
+
+    if (!fitted || !model) {
+      syncVerdictByTrack.set(key, "inconclusive");
+      applyHeldNativeModel();
+      return;
+    }
+
+    if (isNearIdentityFit(model)) {
+      syncVerdictByTrack.set(key, "aligned");
+      // The native caption file carries the player's own timeline; when the
+      // display agrees with the reference anyway, any live non-trivial
+      // native model can only be the player chasing its own file's error.
+      // Manual anchors are the viewer's ear and always outrank this veto.
+      if (!driftCorrector.getAnchors().some((a) => a.source === "user")) {
+        syncNativeSuppressed.add(key);
+        if (isNonTrivialModel(driftCorrector.current)) {
+          driftCorrector.invalidateModel();
+          applyDriftModelToIndex();
+          cueIndex.build(cues);
+          log(
+            "Sync arbitration: dropped the native-pairing drift model — " +
+            "the display track already matches the reference timeline",
+          );
+        }
+      }
+      log(
+        `Sync arbitration: "${track.label}" matches "${fitted.ref.label}" ` +
+        `(rate ${model.rate.toFixed(4)}, offset ${Math.round(model.offsetMs)} ms, ` +
+        `${fitted.result.pairs.length} text pairs, median residual ` +
+        `${Math.round(fitted.result.medianResidualMs)} ms) `,
+      );
+      return;
+    }
+
+    // Significant disagreement: the display is the odd one out.
+    syncVerdictByTrack.set(key, "odd");
+    if (coverageUpgradeSuspended || userUploadActive) return;
+    const refCoverage = durationMs > 0 ? trackCoverageRatio(fitted.ref, durationMs) : null;
+    if (refCoverage !== null && refCoverage < COVERAGE_ACCEPTABLE_RATIO) {
+      log(`Sync arbitration: keeping "${track.label}" — "${fitted.ref.label}" does not cover the runtime`);
+      applyHeldNativeModel();
+      return;
+    }
+    if (
+      calculateRecommendScore(fitted.ref, settings, scoreContext) <=
+      calculateRecommendScore(track, settings, scoreContext)
+    ) {
+      log(
+        `Sync arbitration: "${track.label}" disagrees with "${fitted.ref.label}" ` +
+        `(offset ${Math.round(model.offsetMs)} ms, rate ${model.rate.toFixed(4)}) ` +
+        "but the reference is not a better track — keeping the display",
+      );
+      applyHeldNativeModel();
+      return;
+    }
+    syncSwitchedAway.add(key);
+    log(
+      `Sync arbitration: switching "${track.label}" → "${fitted.ref.label}" ` +
+      `(offset ${Math.round(model.offsetMs)} ms, rate ${model.rate.toFixed(4)})`,
+    );
+    showNotification(
+      "info",
+      `Switched to "${fitted.ref.label}" — the previous track was out of sync`,
+      false,
+    );
+    await selectTrack(fitted.ref, { replace: true });
+  } finally {
+    syncPendingKeys.delete(key);
+  }
+}
+
 /**
  * Apply (or clear) the drift model to the cue index.
  * The model maps video time → subtitle time; the index expects subtitle time
@@ -3000,6 +3251,32 @@ function setupAutoDriftWatchInner(video: HTMLVideoElement): void {
       `Auto drift: anchor at video=${(videoMs / 1000).toFixed(1)}s ` +
       `sim=${match.similarity.toFixed(2)} notes=${result.notes.join(",") || "ok"}`,
     );
+
+    // Cross-track arbitration gates native-pairing models. The native
+    // caption file carries the site's own (sometimes mis-timed) timeline;
+    // once the reference timeline is known, a non-trivial model on an
+    // aligned track is the player chasing its own file's error. Manual
+    // anchors are the viewer's ear — they always bypass this.
+    const displayedKey = currentTrack ? trackKey(currentTrack) : null;
+    if (
+      displayedKey !== null &&
+      !userUploadActive &&
+      !driftCorrector.getAnchors().some((a) => a.source === "user") &&
+      (syncPendingKeys.has(displayedKey) || syncNativeSuppressed.has(displayedKey))
+    ) {
+      if (syncPendingKeys.has(displayedKey)) {
+        debug("Auto drift: holding model while cross-track arbitration runs");
+        return;
+      }
+      if (isNonTrivialModel(driftCorrector.current)) {
+        driftCorrector.invalidateModel();
+        debug(
+          "Auto drift: model suppressed — the display track already matches " +
+          "the reference timeline",
+        );
+        return;
+      }
+    }
 
     applyDriftModelToIndex();
 
@@ -4511,16 +4788,21 @@ function processCues(newCues: Cue[], options: { replace?: boolean } = {}): void 
     if (hasCapturedAnchors) {
       // Migrate captured anchors to the new key so future sessions find them
       saveDriftRecord();
+      void maybeSettleSyncVerdict();
     } else {
       loadDriftModelForCurrentTrack().then(() => {
         applyDriftModelToIndex();
         cueIndex.build(cues);
         log(`Processed ${cues.length} cues after drift reload`);
+        // Run after the storage model settled in so cross-track arbitration
+        // can veto it — a restored record must not wipe a just-made verdict.
+        return maybeSettleSyncVerdict();
       }).catch((err) => warn("Drift model reload failed:", err));
     }
   } else {
     // Same movie: re-apply existing model over the updated base cue set
     applyDriftModelToIndex();
+    void maybeSettleSyncVerdict();
   }
 
   // Build index for fast lookup
