@@ -106,7 +106,7 @@ export function youTubePageScript(): void {
 
   // A READY posted before this script existed is gone; the DOM attribute
   // the content script sets is the listener-independent signal.
-  const readyPoll = setInterval(markRelayReady, 250);
+  const readyPoll = setInterval(markRelayReady, 100);
   setTimeout(() => {
     clearInterval(readyPoll);
     if (!relayReady && pendingPrelude.length > 0) {
@@ -508,7 +508,7 @@ export function youTubePageScript(): void {
         // video; the addon rule is captions on unless the popup Disable.
         if (!ccDisabledByUser) {
           resetCaptionFlags();
-          setTimeout(tryEnableCaptions, 800);
+          setTimeout(tryEnableCaptions, 100);
         }
       }
     };
@@ -579,7 +579,7 @@ export function youTubePageScript(): void {
   // stays inert until caption data mounts — aria-pressed never flips), so the
   // player's captions module is toggled directly, and every attempt is
   // verified against the button state and retried a bounded number of times.
-  const CAPTION_RETRY_DELAYS_MS = [1200, 2500, 4000, 6000, 8000, 10000];
+  const CAPTION_RETRY_DELAYS_MS = [600, 1200, 2400, 4800, 8000, 10000];
 
   function captionsReportOn(): boolean {
     return (
@@ -593,7 +593,7 @@ export function youTubePageScript(): void {
     const w = window as any;
     w.__ffprofanity_caption_triggered = true;
     delete w.__ffprofanity_caption_inflight;
-    setTimeout(() => extractFromInitialPlayerResponse(), 500);
+    setTimeout(() => extractFromInitialPlayerResponse(), 100);
   }
 
   function verifyCaptionsEnabled(stage: string): void {
@@ -642,17 +642,18 @@ export function youTubePageScript(): void {
 
     const player = getLivePlayer();
     // #movie_player is a stub until the real player mounts; one attempt must
-    // not be wasted toggling it, so retry until the API is wired.
+    // not be wasted toggling it, so retry until the API is wired. 250ms
+    // cadence, 60 attempts ≈ 15s of readiness window.
     if (!player?.getVideoData?.()?.video_id) {
       const attempts = (window as any).__ffprofanity_caption_attempts || 0;
-      if (attempts >= 20) {
+      if (attempts >= 60) {
         verifyCaptionsEnabled("player readiness");
         return;
       }
       (window as any).__ffprofanity_caption_attempts = attempts + 1;
       log("Player API not ready for caption toggle, retrying");
       delete (window as any).__ffprofanity_caption_inflight;
-      setTimeout(tryEnableCaptions, 1000);
+      setTimeout(tryEnableCaptions, 250);
       return;
     }
 
@@ -686,11 +687,11 @@ export function youTubePageScript(): void {
 
     if (document.readyState === "complete" || document.readyState === "interactive") {
       extractFromInitialPlayerResponse();
-      setTimeout(tryEnableCaptions, 1500);
+      setTimeout(tryEnableCaptions, 0);
     } else {
       document.addEventListener("DOMContentLoaded", () => {
         extractFromInitialPlayerResponse();
-        setTimeout(tryEnableCaptions, 1500);
+        setTimeout(tryEnableCaptions, 0);
       });
     }
 
@@ -702,7 +703,7 @@ export function youTubePageScript(): void {
       const video = document.querySelector("video");
       const ccButton = document.querySelector(".ytp-subtitles-button");
       if (video && ccButton && !(window as any).__ffprofanity_caption_triggered) {
-        setTimeout(tryEnableCaptions, 500);
+        setTimeout(tryEnableCaptions, 0);
       }
     });
     videoObserver.observe(document.body, { childList: true, subtree: true });

@@ -364,6 +364,49 @@ function isShortsPlayerVideo(v: HTMLVideoElement): boolean {
   return v.closest("#shorts-player") !== null;
 }
 
+// Short autoplays the moment the player mounts — before a capture of THAT
+// video can possibly be armed. The startup blackout mutes the player for
+// that gap instead of letting opening profanity play through (viewer-facing
+// choice, 2026-11-17: always-on for Shorts). It ends when this video's cue
+// set arrives, and is bounded by SHORTS_BLACKOUT_MS so a captionless Short
+// cannot stay silent forever.
+const SHORTS_BLACKOUT_MS = 8000;
+let shortsCapturePending = false;
+let shortsBlackoutActive = false;
+let shortsBlackoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+function isShortsPage(): boolean {
+  try {
+    return /^\/shorts\//.test(new URL(window.location.href).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function startShortsBlackout(reason: string): void {
+  if (settings.enabled === false || !videoElement || !isShortsPage()) return;
+  if (shortsBlackoutActive) return;
+  shortsBlackoutActive = true;
+  log(`Startup blackout on (${reason}) — Shorts muted until capture arms or ${SHORTS_BLACKOUT_MS}ms`);
+  videoElement.muted = true;
+  shortsBlackoutTimer = setTimeout(() => endShortsBlackout("timeout"), SHORTS_BLACKOUT_MS);
+}
+
+function endShortsBlackout(reason: string): void {
+  if (shortsBlackoutTimer) {
+    clearTimeout(shortsBlackoutTimer);
+    shortsBlackoutTimer = null;
+  }
+  if (!shortsBlackoutActive) return;
+  shortsBlackoutActive = false;
+  // A concurrent profanity mute owns the element now; its own unmute path
+  // restores audio when the window ends.
+  if (!isMuted && videoElement) {
+    videoElement.muted = false;
+  }
+  log(`Startup blackout off (${reason})`);
+}
+
 /**
  * Drop every auto-detected subtitle state that belongs to a video that is no
  * longer playing. SPA players (YouTube playlists) swap videos inside one
@@ -475,6 +518,9 @@ function setupSpaVideoChangeReset(): void {
     if (nowVid && nowVid === lastVideoId) return;
     log(`Video change via ${why}: resetting session state`);
     lastVideoId = nowVid;
+    // The video just changed: a fresh capture must arm before the next
+    // autoplay Short is covered. Shorts re-engage the startup blackout.
+    shortsCapturePending = isShortsPage();
     void resetSessionForVideoChange();
   };
 
@@ -655,6 +701,24 @@ async function init(): Promise<void> {
   // Initial CC-state broadcast: the page script may have missed the earlier
   // proactive one, or the popup may have re-enabled the session before load.
   broadcastCcStateToPage();
+
+  // Shorts startup blackout (always-on, viewer decision 2026-11-17): a Short
+  // autoplays before its capture arms, so mute the gap. navigate-start arms
+  // the expectation (yt-navigate-finish / URL poll confirm video changes via
+  // resetIfVideoChanged); leaving Shorts clears it.
+  shortsCapturePending = isShortsPage();
+  document.addEventListener(
+    "yt-navigate-start",
+    () => {
+      if (isShortsPage()) {
+        shortsCapturePending = true;
+      } else {
+        shortsCapturePending = false;
+        endShortsBlackout("left shorts");
+      }
+    },
+    true,
+  );
 
   log("Content script ready");
 }
@@ -2454,6 +2518,10 @@ function attachVideoListeners(video: HTMLVideoElement): void {
       isActive = true;
       startMonitoring();
     }
+    // Shorts autoplay into uncovered audio while the capture is pending.
+    if (shortsCapturePending) {
+      startShortsBlackout("play");
+    }
   });
 
   video.addEventListener("pause", () => {
@@ -2481,6 +2549,12 @@ function attachVideoListeners(video: HTMLVideoElement): void {
   // A video element is now available — replay intercepted relays that
   // arrived before the player mounted (Shorts mounts its player late).
   flushDeferredSubtitleMessages();
+
+  // Autoplay can already be under way when the listeners attach — the very
+  // first Short after a page load does exactly that.
+  if (!video.paused && shortsCapturePending) {
+    startShortsBlackout("attach");
+  }
 }
 
 /**
@@ -4320,6 +4394,8 @@ function handleStorageChange(
       } else if (!settings.enabled && isActive) {
         isActive = false;
         stopMonitoring();
+        shortsCapturePending = false;
+        endShortsBlackout("disabled");
       }
       broadcastCcStateToPage();
     }
@@ -4485,6 +4561,8 @@ async function handleMessage(message: unknown): Promise<unknown> {
     case "disable":
       isActive = false;
       stopMonitoring();
+      shortsCapturePending = false;
+      endShortsBlackout("disabled");
       broadcastCcStateToPage();
       break;
 
@@ -5225,6 +5303,11 @@ function processCues(newCues: Cue[], options: { replace?: boolean } = {}): void 
     );
   }
 
+  // A fresh cue set arms this video: the startup blackout retires and the
+  // monitoring loop takes over (it re-mutes mid-cue within a tick).
+  shortsCapturePending = false;
+  endShortsBlackout("captured");
+
   // Start monitoring if we have a video
   if (cues.length > 0 && videoElement) {
     log(
@@ -5556,8 +5639,13 @@ function sendUnmuteNow(): void {
     `UNMUTE at ${videoElement?.currentTime?.toFixed(2)}s`,
   );
 
-  // Primary method: unmute video element directly (works on both desktop and mobile)
-  if (videoElement && originalVolume !== null) {
+  // Primary method: unmute video element directly (works on both desktop and
+  // mobile). While the Shorts startup blackout holds, it owns the element
+  // mute — leave it and let endShortsBlackout restore audio.
+  if (shortsBlackoutActive) {
+    // The mute never altered volume, so dropping the saved copy is enough.
+    originalVolume = null;
+  } else if (videoElement && originalVolume !== null) {
     videoElement.muted = false;
     videoElement.volume = originalVolume;
     originalVolume = null;
