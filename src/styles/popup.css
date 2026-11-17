@@ -329,6 +329,17 @@ body {
   margin-bottom: 6px;
 }
 
+/* Sync verdict chip: the arbitration outcome as its own color-coded tag */
+.sync-chip {
+  font-size: 12px;
+  margin: -2px 0 6px;
+}
+
+.sync-chip.aligned { color: var(--success-color); }
+.sync-chip.switched { color: #2196f3; }
+.sync-chip.kept { color: var(--warning-color); }
+.sync-chip.blocked { color: var(--error-color); }
+
 .drift-buttons {
   display: flex;
   gap: 6px;

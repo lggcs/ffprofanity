@@ -721,6 +721,8 @@ interface DriftStatus {
   suspended?: boolean;
   /** The viewer's uploaded subtitle file is active for this tab */
   userUploadActive?: boolean;
+  /** Latest conclusive sync verdict for the current video (session-only) */
+  syncSurface?: { state: string; detail: string } | null;
 }
 
 /**
@@ -816,6 +818,7 @@ async function refreshDriftStatus(): Promise<void> {
     })) as DriftStatus | undefined;
     if (response) {
       renderDriftStatus(response);
+      renderSyncChip(response);
     }
   } catch {
     // Content script not in this tab — leave the default text
@@ -867,6 +870,31 @@ function renderDriftStatus(status: DriftStatus): void {
   const anchors = status.anchorCount > 1 ? ` (${status.anchorCount} anchors)` : "";
   const autoStr = status.autoEnabled ? " auto" : "";
   statusEl.textContent = `Applied: ${offsetStr}${rateStr}${anchors}${autoStr}`;
+}
+
+/**
+ * Render the sync verdict chip under the timing controls: the latest
+ * conclusive arbitration verdict for the current video, color-coded as its
+ * own tag — never part of a track name. Hidden until a verdict is measured.
+ */
+function renderSyncChip(status: DriftStatus): void {
+  const chipEl = document.getElementById("syncVerdictChip");
+  if (!chipEl) return;
+  chipEl.classList.remove("aligned", "switched", "kept", "blocked");
+  const surface = status.syncSurface;
+  if (!surface) {
+    chipEl.classList.add("hidden");
+    return;
+  }
+  const labels: Record<string, string> = {
+    aligned: "Synced",
+    switched: "Switched",
+    kept: "Kept pick",
+    blocked: "Not acted",
+  };
+  chipEl.textContent = `${labels[surface.state] ?? "Timing"} · ${surface.detail}`;
+  chipEl.classList.remove("hidden");
+  chipEl.classList.add(surface.state);
 }
 
 /**

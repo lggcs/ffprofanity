@@ -183,6 +183,10 @@ const syncUserLocked = new Set<string>();
 // Arbitration paused by an explicit pick; cleared when the viewer
 // re-enables automatic timing. The track-swap machinery stays suspended.
 let syncSuspended = false;
+// Popup chip: the latest conclusive arbitration verdict for this video and
+// how it acted — latest event wins, cleared with the video, never persisted.
+type SyncSurfaceState = "aligned" | "switched" | "kept" | "blocked";
+let syncSurface: { state: SyncSurfaceState; detail: string } | null = null;
 /** Hard cap on reference fetches per arbitration. The evidence standard is
  * two agreeing fits by definition; junk references (mangled text, clones)
  * don't count as evidence but still cost a fetch, so the fetch count — not
@@ -424,6 +428,7 @@ async function resetSessionForVideoChange(): Promise<void> {
   syncNativeSuppressed.clear();
   syncUserLocked.clear();
   syncSuspended = false;
+  syncSurface = null;
 
   if (overlayContainer) {
     const cueEl = overlayContainer.querySelector<HTMLElement>(".ffprofanity-cue");
@@ -1768,20 +1773,6 @@ function handleSubtitleContent(
 }
 
 /**
- * Auto-select the best detected track
- */
-async function autoSelectBestTrack(): Promise<void> {
-  if (detectedTracks.length === 0) return;
-
-  const selection = selectBestTrack(detectedTracks, settings);
-  log("Auto-selecting track:", selection.track?.label);
-
-  if (selection.track) {
-    await selectTrack(selection.track);
-  }
-}
-
-/**
  * Scan for subtitle tracks on the page
  */
 let lastScanTime = 0;
@@ -1986,8 +1977,12 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
         });
 
         if (selection.track && selection.autoSelected) {
-          selectTrack(selection.track);
-          showNotification("success", "", true);
+          void maybeApplyDominantFamilyPick(selection.track).then((settledPick) => {
+            if (settledPick) {
+              selectTrack(settledPick);
+              showNotification("success", "", true);
+            }
+          });
         }
       }
     }
@@ -2673,11 +2668,12 @@ function applyHeldNativeModel(): void {
  * direct control. An explicit track pick (popup or the site's own menu)
  * suspends arbitration until they re-enable automatic timing; the picked
  * track stays switch-proof (syncUserLocked) — their ear decides.
+ * The family pre-pick passes requireAutoCorrection=false: choosing the
+ * dominant timebase is a selection-quality concern, not drift automation.
  */
-function autoTimingAllowed(track: SubtitleTrack): boolean {
+function autoTimingAllowed(track: SubtitleTrack, requireAutoCorrection = true): boolean {
   return (
-    autoDriftEnabled &&
-    driftEnabled &&
+    (!requireAutoCorrection || (autoDriftEnabled && driftEnabled)) &&
     settings.autoSelectTrack &&
     !userUploadActive &&
     !syncSuspended &&
@@ -2707,13 +2703,82 @@ async function loadSyncReferenceCues(url: string): Promise<Cue[] | null> {
   }
 }
 
+/** One text-matched fit against a reference track. */
+type SyncRefFit = { result: ReconcileResult; ref: SubtitleTrack };
+
+/**
+ * Fetch and reconcile candidate same-language tracks against an anchor cue
+ * list until one accepted fit or two agreeing foreign-rate fits — or the
+ * fetch cap — settles the question. Junk fits (mangled text, no transform)
+ * cost fetches, not evidence; a near-identical clone mirror of the anchor is
+ * skipped as trivial agreement. Every examined candidate is recorded in
+ * `tried` when provided, so arbitration callers never retry them.
+ */
+async function probeSameLanguageRefs(args: {
+  anchorCues: Cue[];
+  candidates: SubtitleTrack[];
+  tag: string;
+  maxFetches?: number;
+  tried?: Set<string>;
+}): Promise<{ fitted: SyncRefFit | null; altPair: SyncRefFit[] | null }> {
+  const { anchorCues, candidates, tag } = args;
+  const maxFetches = args.maxFetches ?? SYNC_MAX_REF_FETCHES;
+  let fitted: SyncRefFit | null = null;
+  const altFits: SyncRefFit[] = [];
+  let altPair: SyncRefFit[] | null = null;
+  let fetches = 0;
+  for (const ref of candidates) {
+    if (fitted || altPair || fetches >= maxFetches) break;
+    const refUrl = ref.url;
+    if (!refUrl) continue;
+    args.tried?.add(trackKey(ref));
+    if (!syncRefCueCache.has(refUrl)) fetches++;
+    const refCues = await loadSyncReferenceCues(refUrl);
+    if (!refCues || refCues.length < SYNC_MIN_REF_CUES) continue;
+    const result = reconcileTracks(anchorCues, refCues);
+    if (result.accepted && result.model) {
+      if (isNearIdentityFit(result.model) && isNearDuplicateTrack(anchorCues, refCues)) {
+        // A near-identical copy of the anchor agrees with it trivially — the
+        // reference is the same file re-hosted, not an opinion.
+        debug(`${tag}: "${ref.label}" mirrors the anchor's cue grid — skipped`);
+        continue;
+      }
+      fitted = { result, ref };
+      break;
+    }
+    // A clean pairing that fails ONLY the rate gate is not junk: it is a
+    // candidate cross-transfer fingerprint (an agreeing pair settles it).
+    // Junk fits don't consume evidence — the fetch cap bounds the work.
+    if (
+      !result.accepted &&
+      result.model &&
+      result.gateFailures.length === 1 &&
+      result.gateFailures[0] === RATE_OUT_OF_RANGE
+    ) {
+      const fit: SyncRefFit = { result, ref };
+      for (const prev of altFits) {
+        if (isConsistentCrossTransfer([result.model, prev.result.model!])) {
+          altPair = [prev, fit];
+          break;
+        }
+      }
+      altFits.push(fit);
+      if (altPair) break;
+    }
+    debug(
+      `${tag}: fit against "${ref.label}" rejected ` +
+        `(${result.gateFailures.join(", ") || "no model"})`,
+    );
+  }
+  return { fitted, altPair };
+}
+
 /**
  * Compare the displayed track's timeline against other same-language tracks
- * until one accepted fit or two agreeing cross-transfer fits — or the fetch
- * cap — settles the question, then act: switch when the disagreement is
- * proven, or veto native-pairing drift models that contradict a match.
- * Junk references (mangled text, near-identical clones) cost fetches, not
- * evidence. Every action is gated; when nothing is certain, nothing changes.
+ * (probeSameLanguageRefs), then act on the outcome: switch when the
+ * disagreement is proven, or veto native-pairing drift models that
+ * contradict a match. Every action is gated; when nothing is certain,
+ * nothing changes.
  */
 async function maybeSettleSyncVerdict(): Promise<void> {
   const track = currentTrack;
@@ -2755,62 +2820,17 @@ async function maybeSettleSyncVerdict(): Promise<void> {
   syncPendingKeys.add(key);
   syncRefTried.set(key, tried);
   try {
-    let fitted: { result: ReconcileResult; ref: SubtitleTrack } | null = null;
-    // Fits the rate gate had to reject solely on rate — candidate
-    // cross-transfer fingerprints; the verdict below needs two that agree.
-    const crossTransferFits: Array<{ result: ReconcileResult; ref: SubtitleTrack }> = [];
-    let agreed: Array<{ result: ReconcileResult; ref: SubtitleTrack }> | null = null;
-    let fetches = 0;
-    for (const ref of candidates) {
-      if (fitted || agreed || fetches >= SYNC_MAX_REF_FETCHES) break;
-      if (syncSuspended) return;
-      const refUrl = ref.url;
-      if (!refUrl) continue;
-      tried.add(trackKey(ref));
-      if (!syncRefCueCache.has(refUrl)) fetches++;
-      const refCues = await loadSyncReferenceCues(refUrl);
-      if (!refCues || refCues.length < SYNC_MIN_REF_CUES) continue;
-      const result = reconcileTracks(baseCues, refCues);
-      if (result.accepted && result.model) {
-        if (isNearIdentityFit(result.model) && isNearDuplicateTrack(baseCues, refCues)) {
-          // A near-identical copy of the display agrees with it trivially —
-          // the reference is the same file re-hosted, not an opinion.
-          debug(
-            `Sync arbitration: "${ref.label}" mirrors the display's cue grid — skipped`,
-          );
-          continue;
-        }
-        fitted = { result, ref };
-        break;
-      }
-      // A clean pairing that fails ONLY the rate gate is not junk: it is a
-      // candidate cross-transfer fingerprint (verdict below). Junk fits
-      // (mangled text, no transform) don't consume evidence — the fetch cap
-      // bounds the work instead.
-      if (
-        !result.accepted &&
-        result.model &&
-        result.gateFailures.length === 1 &&
-        result.gateFailures[0] === RATE_OUT_OF_RANGE
-      ) {
-        const fit = { result, ref };
-        const fitModel = result.model;
-        for (const prev of crossTransferFits) {
-          if (isConsistentCrossTransfer([fitModel, prev.result.model!])) {
-            agreed = [prev, fit];
-            break;
-          }
-        }
-        crossTransferFits.push(fit);
-        if (agreed) break;
-      }
-      debug(
-        `Sync arbitration: fit against "${ref.label}" rejected ` +
-        `(${result.gateFailures.join(", ") || "no model"})`,
-      );
-    }
+    const probe = await probeSameLanguageRefs({
+      anchorCues: baseCues,
+      candidates,
+      tag: "Sync arbitration",
+      tried,
+    });
+    const fitted = probe.fitted;
+    const agreed = probe.altPair;
 
     // The session may have moved on while the fetches ran.
+    if (syncSuspended) return;
     const settledTrack = currentTrack;
     if (!settledTrack || trackKey(settledTrack) !== key) return;
     const model = fitted?.result.model ?? null;
@@ -2840,6 +2860,7 @@ async function maybeSettleSyncVerdict(): Promise<void> {
             `"${track.label}" follows a different timing master (~${leadPct}%) — keeping your pick`,
             false,
           );
+          syncSurface = { state: "kept", detail: `a different timing master (~${leadPct}%)` };
           applyHeldNativeModel();
           return;
         }
@@ -2860,6 +2881,10 @@ async function maybeSettleSyncVerdict(): Promise<void> {
           log(
             `Sync arbitration: cross-transfer disagreement proven, but no agreeing reference covers the runtime — keeping "${track.label}"`,
           );
+          syncSurface = {
+            state: "blocked",
+            detail: `a different timing master (~${leadPct}%), but no agreeing reference covers the runtime`,
+          };
           applyHeldNativeModel();
           return;
         }
@@ -2875,6 +2900,10 @@ async function maybeSettleSyncVerdict(): Promise<void> {
           `Switched to "${crossTarget.ref.label}" — the previous track follows a different timing master (~${ratePct}%)`,
           false,
         );
+        syncSurface = {
+          state: "switched",
+          detail: `now on "${crossTarget.ref.label}" — a different timing master (~${ratePct}%)`,
+        };
         await selectTrack(crossTarget.ref, { replace: true });
         return;
       }
@@ -2885,6 +2914,7 @@ async function maybeSettleSyncVerdict(): Promise<void> {
 
     if (isNearIdentityFit(model)) {
       syncVerdictByTrack.set(key, "aligned");
+      syncSurface = { state: "aligned", detail: `agrees with "${fitted.ref.label}"` };
       // The native caption file carries the player's own timeline; when the
       // display agrees with the reference anyway, any live non-trivial
       // native model can only be the player chasing its own file's error.
@@ -2921,6 +2951,10 @@ async function maybeSettleSyncVerdict(): Promise<void> {
         `"${track.label}" is ~${offSec.toFixed(1)}s off vs "${fitted.ref.label}" — keeping your pick`,
         false,
       );
+      syncSurface = {
+        state: "kept",
+        detail: `~${offSec.toFixed(1)}s off vs "${fitted.ref.label}"`,
+      };
       applyHeldNativeModel();
       return;
     }
@@ -2928,21 +2962,16 @@ async function maybeSettleSyncVerdict(): Promise<void> {
     const refCoverage = durationMs > 0 ? trackCoverageRatio(fitted.ref, durationMs) : null;
     if (refCoverage !== null && refCoverage < COVERAGE_ACCEPTABLE_RATIO) {
       log(`Sync arbitration: keeping "${track.label}" — "${fitted.ref.label}" does not cover the runtime`);
+      syncSurface = {
+        state: "blocked",
+        detail: `proven ~${(Math.abs(model.offsetMs) / 1000).toFixed(1)}s off, but "${fitted.ref.label}" does not cover the runtime`,
+      };
       applyHeldNativeModel();
       return;
     }
-    if (
-      calculateRecommendScore(fitted.ref, settings, scoreContext) <=
-      calculateRecommendScore(track, settings, scoreContext)
-    ) {
-      log(
-        `Sync arbitration: "${track.label}" disagrees with "${fitted.ref.label}" ` +
-        `(offset ${Math.round(model.offsetMs)} ms, rate ${model.rate.toFixed(4)}) ` +
-        "but the reference is not a better track — keeping the display",
-      );
-      applyHeldNativeModel();
-      return;
-    }
+    // Proven disagreement is the gate — a score tie doesn't protect a track
+    // that measured out of sync (full-length tracks of the same language tie
+    // on priors; the cross-transfer path switches on the same standard).
     syncSwitchedAway.add(key);
     log(
       `Sync arbitration: switching "${track.label}" → "${fitted.ref.label}" ` +
@@ -2953,10 +2982,103 @@ async function maybeSettleSyncVerdict(): Promise<void> {
       `Switched to "${fitted.ref.label}" — the previous track was out of sync`,
       false,
     );
+    syncSurface = {
+      state: "switched",
+      detail: `now on "${fitted.ref.label}" — the previous track was out of sync`,
+    };
     await selectTrack(fitted.ref, { replace: true });
   } finally {
     syncPendingKeys.delete(key);
   }
+}
+
+/**
+ * First-pick family check: before the initial auto-selection lands a track,
+ * reconcile it against the other same-language candidates. An accepted fit
+ * elsewhere means other releases share the pick's timing master and the
+ * pick keeps the lead; two references that agree with each other instead —
+ * on a timebase the pick doesn't share — prove the pick is the odd one out
+ * (e.g. a PAL-speed release), so the best-scored agreeing reference that
+ * covers the runtime becomes the pick instead. Bounded by the shared fetch
+ * cap; anything unprovable within it keeps the intended pick (fail closed).
+ * Runs once per video at first auto-selection; later re-selections rely on
+ * arbitration after the pick.
+ */
+async function maybeApplyDominantFamilyPick(
+  pick: SubtitleTrack,
+): Promise<SubtitleTrack | null> {
+  if (!autoTimingAllowed(pick, false) || !pick.url) return pick;
+  const pickUrl = pick.url;
+  const pickKey = trackKey(pick);
+  const lang = normalizeLanguageCode(pick.language);
+  if (!lang) return pick;
+  const durationMs = videoDurationMs();
+  const scoreContext = { videoDurationMs: durationMs || undefined };
+  const candidates = detectedTracks
+    .filter((t) =>
+      t.source !== "user" &&
+      !!t.url &&
+      trackKey(t) !== pickKey &&
+      !isStreamingTrackSource(t) &&
+      !isForeignVideoTrackUrl(t.url) &&
+      !syncSwitchedAway.has(trackKey(t)) &&
+      normalizeLanguageCode(t.language) === lang)
+    .sort(
+      (a, b) =>
+        calculateRecommendScore(b, settings, scoreContext) -
+        calculateRecommendScore(a, settings, scoreContext),
+    );
+  // An agreeing pair needs two references; with fewer, the check can
+  // never act — and keep is the fail-closed default.
+  if (candidates.length < 2) return pick;
+
+  // The anchor is the pick itself — its cues must be fetched before the
+  // probe can compare anything (cached; the track's own load reuses it).
+  let spent = 0;
+  if (!syncRefCueCache.has(pickUrl)) spent++;
+  const pickCues = await loadSyncReferenceCues(pickUrl);
+  if (!pickCues || pickCues.length < SYNC_MIN_CUES) return pick;
+  // The viewer may have picked a track while this one loaded.
+  if (currentTrack || syncSuspended || userUploadActive) return null;
+
+  const probe = await probeSameLanguageRefs({
+    anchorCues: pickCues,
+    candidates,
+    tag: "Family check",
+    maxFetches: SYNC_MAX_REF_FETCHES - spent,
+  });
+  // The viewer may have picked a track while the references loaded.
+  if (currentTrack || syncSuspended || userUploadActive) return null;
+  if (probe.fitted) {
+    debug(
+      `Family check: "${pick.label}" agrees with "${probe.fitted.ref.label}" — keeping the pick`,
+    );
+    return pick;
+  }
+  if (!probe.altPair) return pick;
+  for (const fit of probe.altPair) {
+    const fitModel = fit.result.model;
+    if (!fitModel) continue;
+    const fitCoverage = durationMs > 0 ? trackCoverageRatio(fit.ref, durationMs) : null;
+    if (fitCoverage !== null && fitCoverage < COVERAGE_ACCEPTABLE_RATIO) continue;
+    const ratePct = Math.round(Math.abs(1 - fitModel.rate) * 1000) / 10;
+    log(
+      `Family check: "${pick.label}" disagrees with two same-language references that ` +
+      `agree with each other at rate ${fitModel.rate.toFixed(4)} — starting with ` +
+      `"${fit.ref.label}" instead`,
+    );
+    // Proven odd one out: the pick must not return as a reference later.
+    syncSwitchedAway.add(pickKey);
+    syncSurface = {
+      state: "switched",
+      detail: `started on "${fit.ref.label}" — the scored pick was the odd one out (~${ratePct}%)`,
+    };
+    return fit.ref;
+  }
+  debug(
+    `Family check: disagreement proven but no agreeing reference covers the runtime — keeping "${pick.label}"`,
+  );
+  return pick;
 }
 
 /**
@@ -3160,6 +3282,7 @@ function getDriftStatus(): {
   autoWatching: boolean;
   suspended: boolean;
   userUploadActive: boolean;
+  syncSurface: { state: SyncSurfaceState; detail: string } | null;
 } {
   const model = driftCorrector.current;
   return {
@@ -3173,6 +3296,7 @@ function getDriftStatus(): {
     autoWatching: adoptedNativeTrack !== null,
     suspended: syncSuspended,
     userUploadActive,
+    syncSurface,
   };
 }
 
