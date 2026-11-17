@@ -1094,6 +1094,10 @@ function handleInterceptedMessage(event: MessageEvent): void {
       }
       return;
     }
+    // This is the only capture path PlutoTV cues arrive on — hook native
+    // display suppression here so the site's captions don't double ours.
+    // Skipped while the addon is off: the viewer gets the site's captions back.
+    if (isActive) hideNativeSubtitlesForSite(String(data.source || "plutotv.texttracks"));
     textTracksCues.push(data);
     startTextTracksProcessor();
     return;
@@ -1348,6 +1352,29 @@ function handleInterceptedMessage(event: MessageEvent): void {
 function hideNativeSubtitlesForSite(source: string): void {
   // Detect site from source or hostname
   const hostname = window.location.hostname.toLowerCase();
+
+  // PlutoTV: capture reads the native textTracks (HLS.js cues) and the
+  // auto-drift reference clock adopts one of those tracks — disabling them
+  // would stop capture. Suppression here is display-only CSS, and the ::cue
+  // rule uses Gecko-supported properties (Firefox ignores visibility/opacity
+  // on ::cue, which is why the native captions kept rendering alongside ours).
+  if (hostname.includes('pluto')) {
+    const styleId = 'ffprofanity-hide-native-subtitles';
+    let style = document.getElementById(styleId) as HTMLStyleElement;
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = [
+      '.vjs-text-track-display { visibility: hidden !important; opacity: 0 !important; }',
+      '.vjs-text-track-cue { visibility: hidden !important; opacity: 0 !important; }',
+      'video::cue { color: transparent !important; background: transparent !important; text-shadow: none !important; }',
+    ].join('\n');
+    log(`Hiding native subtitles for ${source} (site: plutotv, host: ${hostname}) — display-only`);
+    return;
+  }
+
   let site: string | undefined;
 
   // Map hostname patterns to site identifiers

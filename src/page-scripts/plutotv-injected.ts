@@ -36,6 +36,38 @@ function plutoTVPageScript(): void {
   // Determine if we're on a live TV page (checked once at init)
   const isLiveTVPage = window.location.href.includes("/live-tv/");
 
+  // Addon-state parity with the YouTube page script: the content script
+  // broadcasts FFPROFANITY_CC_DISABLED (disabled: !isActive) and answers our
+  // init query. While the addon is off, captions are the viewer's business —
+  // auto-enable stops and the suppression CSS is lifted so Pluto's own
+  // captions render again.
+  let ccAutoEnabled = true;
+
+  function removeNativeHideCss(): void {
+    try {
+      document.getElementById("ffprofanity-hide-native-subtitles")?.remove();
+      document.getElementById("ffprofanity-hide-native-subtitles-fallback")?.remove();
+    } catch {
+      // Nothing to remove yet
+    }
+  }
+
+  window.addEventListener("message", (e: MessageEvent) => {
+    if (e.source !== window) return;
+    const data = e.data as { type?: string; disabled?: boolean } | null;
+    if (!data?.type) return;
+    if (data.type === "FFPROFANITY_CC_DISABLED") {
+      ccAutoEnabled = data.disabled !== true;
+      if (data.disabled === true) removeNativeHideCss();
+      log(
+        "Addon state from content script:",
+        ccAutoEnabled
+          ? "enabled — captions auto-enable active"
+          : "disabled — captions left to the viewer",
+      );
+    }
+  });
+
   async function fetchSubtitleContent(
     url: string,
     language: string,
@@ -238,11 +270,18 @@ function plutoTVPageScript(): void {
         const textTracks = videoEl.textTracks;
         if (!textTracks || textTracks.length === 0) return;
 
+        let activeSubtitleTrack = false;
+        const disabledSubtitleTracks: TextTrack[] = [];
+
         for (let trackIdx = 0; trackIdx < textTracks.length; trackIdx++) {
           const track = textTracks[trackIdx];
           if (!track) continue;
           if (track.kind !== "subtitles" && track.kind !== "captions") continue;
-          if (track.mode !== "showing" && track.mode !== "hidden") continue;
+          if (track.mode !== "showing" && track.mode !== "hidden") {
+            disabledSubtitleTracks.push(track);
+            continue;
+          }
+          activeSubtitleTrack = true;
           if (!track.cues || track.cues.length === 0) continue;
 
           const cues = Array.from(track.cues);
@@ -278,6 +317,29 @@ function plutoTVPageScript(): void {
             );
           }
         }
+
+        // Captions only reach this monitor once a textTrack is active, which
+        // on Pluto happens when the player fetches the rendition — i.e. when
+        // the viewer clicks CC. Auto-enable makes that API-level flip for the
+        // viewer (English-preferred), the same standing rule as the YouTube
+        // re-arm; the addon's CSS suppresses the native render the flip turns
+        // on. Stays off while the addon is disabled and never fights an
+        // already-active track — the viewer's own pick always wins.
+        if (ccAutoEnabled && !activeSubtitleTrack && disabledSubtitleTracks.length > 0) {
+          const preferred =
+            disabledSubtitleTracks.find(
+              (t) =>
+                (t.language || "").toLowerCase().startsWith("en") ||
+                /english/i.test(t.label || ""),
+            ) ?? disabledSubtitleTracks[0];
+          if (preferred) {
+            preferred.mode = "showing";
+            log(
+              "Auto-enabled captions track:",
+              preferred.label || preferred.language || "(unlabeled)",
+            );
+          }
+        }
       } catch (err) {
         if ((window as any).__FFPROFANITY_DEBUG__) {
           console.error("[FFProfanity] textTracks monitor error:", err);
@@ -290,6 +352,13 @@ function plutoTVPageScript(): void {
 
   function init(): void {
     log("PlutoTV extractor initialized via MAIN world injection");
+    // Ask the content script for the current addon state — covers a page
+    // reload while the popup Disable is still latched.
+    try {
+      window.postMessage({ type: "FFPROFANITY_CC_STATE_QUERY" }, "*");
+    } catch {
+      // Content script not listening yet — its next broadcast settles state
+    }
     setupXHR();
     setupFetch();
     monitorTextTracks();
