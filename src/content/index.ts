@@ -111,6 +111,13 @@ let autoDriftRescanStartMs = 0; // Wall-clock budget start for rescans (0 = idle
 const AUTO_DRIFT_RESCAN_BUDGET_MS = 90000;
 let autoDriftModeTicker: ReturnType<typeof setInterval> | null = null; // Keeps adopted track observable
 
+// Seek settle: a seek landing mid-cue would pair that arbitrary video position
+// with the landing cue's start — a biased auto-drift anchor (~depth into cue).
+// Skip drift samples while a seek is in flight and until shortly after
+// 'seeked'; the next natural cue transition anchors correctly.
+let driftSeekSuppressUntilMs = 0;
+const SEEK_DRIFT_SETTLE_MS = 750;
+
 // When true, a user-uploaded subtitle file is active and auto-detection should be suppressed
 let userUploadActive = false;
 
@@ -3654,6 +3661,11 @@ function setupAutoDriftWatchInner(video: HTMLVideoElement): void {
   const captureAutoDriftSample = (nativeText: string, videoMs: number): void => {
     if (!autoDriftEnabled || userUploadActive || cues.length === 0 || baseCues.length === 0) return;
     if (!videoElement || videoElement.paused) return;
+    // Seek guard: while a seek is in flight currentTime already points at the
+    // target, and until SEEK_DRIFT_SETTLE_MS after 'seeked' the landing cue is
+    // paired with a mid-cue position — skip those samples entirely.
+    if (videoElement.seeking) return;
+    if (Date.now() < driftSeekSuppressUntilMs) return;
     if (!driftEnabled) return;
     if (nativeText.trim().length < 8) return;
 
@@ -3832,6 +3844,9 @@ function teardownAutoDriftWatch(): void {
  * Cue clearing is only needed for live HLS segments that need timing recalculation
  */
 function handleVideoSeeked(): void {
+  // Stamp the drift settle window on ALL seeks: the landing is mid-cue, and
+  // pairing it with the cue's start would bias the auto-drift model.
+  driftSeekSuppressUntilMs = Date.now() + SEEK_DRIFT_SETTLE_MS;
   if (!videoElement || !isActive || cues.length === 0) return;
 
   const currentTimeMs = videoElement.currentTime * 1000;
