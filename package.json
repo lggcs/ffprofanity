@@ -1,6 +1,6 @@
 {
   "name": "ffprofanity",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Firefox WebExtension that detects profanity in subtitles, mutes audio, and displays censored subtitles",
   "type": "module",
   "scripts": {
