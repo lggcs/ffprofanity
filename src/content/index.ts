@@ -1581,11 +1581,22 @@ function handleSubtitleContent(
   const rawResult = parseSubtitle(content, 0);
 
   if (rawResult.cues.length === 0) {
-    error("Parse errors:", rawResult.errors);
-    showNotification(
-      "error",
-      `Failed to parse subtitle: ${rawResult.errors.join(", ")}`,
-    );
+    // Explicit user picks deserve the loud error — they can choose another
+    // file. Streaming sites refetch captions in flavors we may not detect
+    // and serve transient blank bodies mid-stream; one failed auto capture
+    // must not read as an alarm, so log quietly and leave the loaded track
+    // untouched.
+    if (isUserSelectionSource(source)) {
+      error("Parse errors:", rawResult.errors);
+      showNotification(
+        "error",
+        `Failed to parse subtitle: ${rawResult.errors.join(", ")}`,
+      );
+    } else {
+      log(
+        `Skipping unparseable auto-detected capture from "${source}" (${rawResult.errors.join("; ")})`,
+      );
+    }
     return;
   }
 
@@ -2160,8 +2171,10 @@ async function selectTrack(
   if (track.url) {
     // Transient origin failures (e.g., Cloudflare 522 behind a proxy rescue)
     // can return an empty body that parses to zero cues — retry a bounded
-    // number of times before surfacing the failure. Intermediate attempts
-    // stay silent so users only see a notification if we ultimately fail.
+    // number of times before giving up. Failures on auto-detected tracks stay
+    // fully silent: the intercept pipeline usually has content of its own, and
+    // a loud error would fire on every expired/undetectable refetch. Only
+    // explicit user picks and user uploads surface the failure.
     const MAX_ATTEMPTS = 3;
     let loaded = false;
     inFlightTrackUrls.add(track.url);
@@ -2191,10 +2204,16 @@ async function selectTrack(
         } catch (err) {
           if (isLastAttempt) {
             error("Failed to fetch subtitle track:", err);
-            showNotification(
-              "error",
-              `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
-            );
+            if (
+              !track.source ||
+              track.source === 'user' ||
+              isUserSelectionSource(track.source)
+            ) {
+              showNotification(
+                "error",
+                `Failed to load subtitles: ${err instanceof Error ? err.message : "Unknown error"}`,
+              );
+            }
           } else {
             warn(`Subtitle fetch attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}) — retrying...`);
             await new Promise((r) => setTimeout(r, 3000));
@@ -4584,7 +4603,7 @@ async function handleSubtitleUpload(
 
   if (result.errors.length > 0) {
     error("Parse errors:", result.errors);
-    if (!options?.silent) {
+    if (!options?.silent && isUserUpload) {
       showNotification("error", result.errors.join("; "));
     }
     return null;
@@ -4592,7 +4611,7 @@ async function handleSubtitleUpload(
 
   if (result.cues.length === 0) {
     error("No cues found in subtitle content");
-    if (!options?.silent) {
+    if (!options?.silent && isUserUpload) {
       showNotification("error", "No subtitles found in file");
     }
     return null;
@@ -4996,11 +5015,37 @@ function processCues(newCues: Cue[], options: { replace?: boolean } = {}): void 
     // This handles both live streams (stream-relative time) and VOD updates
     const existingSource = cues[0]?.source || '';
     if (existingSource === 'youtube-intercepted' || existingSource === 'youtube') {
-      // Same source - replace to handle live stream updates
-      log(
-        `Replacing ${cues.length} YouTube cues with ${processedNewCues.length} (live stream update)`
-      );
-      cues = processedNewCues;
+      // Replace only when the capture covers at least the outgoing span.
+      // YouTube refetches timedtext mid-stream (seeks, quality switches,
+      // ASR chunking); a partial response must never wipe coverage near
+      // the playhead, so anything smaller merges into the list instead.
+      const outgoingStart = cues[0]?.startMs ?? 0;
+      const outgoingEnd = cues[cues.length - 1]?.endMs ?? 0;
+      const incomingStart = processedNewCues[0]?.startMs ?? 0;
+      const incomingEnd = processedNewCues[processedNewCues.length - 1]?.endMs ?? 0;
+      const incomingCoversOutgoing =
+        processedNewCues.length > 0 &&
+        incomingStart <= outgoingStart &&
+        incomingEnd >= outgoingEnd;
+      if (incomingCoversOutgoing) {
+        // Same source - replace to handle live stream updates
+        log(
+          `Replacing ${cues.length} YouTube cues with ${processedNewCues.length} (live stream update)`
+        );
+        cues = processedNewCues;
+      } else {
+        log(
+          `Merging partial YouTube capture (${processedNewCues.length} into ${cues.length} cues)`
+        );
+        const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));
+        const uniqueNewCues = processedNewCues.filter(
+          (c) => !existingKeys.has(`${c.startMs}:${c.text}`),
+        );
+        cues = [...cues, ...uniqueNewCues];
+        if (cues.length > 1) {
+          cues.sort((a, b) => a.startMs - b.startMs);
+        }
+      }
     } else {
       // Different source - accumulate (e.g., switched from uploaded to auto-generated)
       const existingKeys = new Set(cues.map((c) => `${c.startMs}:${c.text}`));

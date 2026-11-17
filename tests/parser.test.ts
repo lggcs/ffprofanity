@@ -282,4 +282,52 @@ This is cue number ${i + 1}`);
       expect(endTime - startTime).toBeLessThan(2000);
     });
   });
+
+  // The player's srv1/srv3 timedtext flavor: a <timedtext> root carrying <p
+  // t= d=> (milliseconds) instead of <transcript><text start= dur=> or TTML
+  // begin=/end=. Refetched without an XML declaration, it previously failed
+  // format detection outright and surfaced "Unable to detect subtitle format".
+  describe('YouTube srv1/srv3 timedtext XML', () => {
+    const srvXml =
+      '<timedtext><body>' +
+      '<p t="1200" d="2400">Hello</p>' +
+      '<p t="4800" d="2000"><s>Shag</s><s> where are you?</s></p>' +
+      '<p t="7000" d="1000"></p>' +
+      '</body></timedtext>';
+
+    it('detects the timedtext root with and without an xml declaration', () => {
+      expect(detectFormat(srvXml)).toBe('xml');
+      expect(
+        detectFormat(
+          '<?xml version="1.0" encoding="utf-8"?><timedtext><body><p t="0" d="500">Hi</p></body></timedtext>',
+        ),
+      ).toBe('xml');
+    });
+
+    it('parses t/d timing, merges segment text, skips empty paragraphs', () => {
+      const result = parseSubtitle(srvXml, 0);
+
+      expect(result.errors).toEqual([]);
+      expect(result.cues.length).toBe(2);
+      expect(result.cues[0]?.startMs).toBe(1200);
+      expect(result.cues[0]?.endMs).toBe(3600);
+      expect(result.cues[0]?.text).toBe('Hello');
+      expect(result.cues[1]?.startMs).toBe(4800);
+      expect(result.cues[1]?.endMs).toBe(6800);
+      expect(result.cues[1]?.text).toBe('Shag where are you?');
+    });
+
+    it('accepts a json3 events array without wireMagic', () => {
+      const json =
+        '{"events":[{"tStartMs":0,"dDurationMs":1500,"segs":[{"utf8":"Yo"}]}]}';
+
+      expect(detectFormat(json)).toBe('json3');
+      const result = parseSubtitle(json, 0);
+      expect(result.errors).toEqual([]);
+      expect(result.cues.length).toBe(1);
+      expect(result.cues[0]?.startMs).toBe(0);
+      expect(result.cues[0]?.endMs).toBe(1500);
+      expect(result.cues[0]?.text).toBe('Yo');
+    });
+  });
 });

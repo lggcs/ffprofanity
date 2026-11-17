@@ -110,9 +110,15 @@ export function detectFormat(content: string): "srt" | "ass" | "vtt" | "xml" | "
     return "jellyfin";
   }
 
+  // YouTube JSON3 without the wireMagic field — some player refetches
+  // deliver just {"events":[...]
+  if (trimmed.startsWith("{") && trimmed.includes('"events"')) {
+    return "json3";
+  }
+
   // YouTube Timedtext XML format (most common from timedtext API)
-  // Can be <transcript> or TTML format
-  if (trimmed.match(/^<\?xml/) || trimmed.match(/<transcript[\s>]/i) || trimmed.match(/<tt\s/i)) {
+  // Can be <transcript>, the player's srv1/srv3 <timedtext> root, or TTML
+  if (trimmed.match(/^<\?xml/) || trimmed.match(/<transcript[\s>]/i) || trimmed.match(/^<timedtext[\s>]/i) || trimmed.match(/<tt\s/i)) {
     return "xml";
   }
 
@@ -460,12 +466,22 @@ export function parseYouTubeXML(content: string): Cue[] {
       return cues;
     }
 
-    // Try TTML format
+    // Try TTML format — and the player's srv1/srv3 variant, which also uses
+    // <p> elements but carries start as t (ms) plus duration as d (ms)
+    // instead of begin/end.
     const pElements = doc.querySelectorAll('p');
     if (pElements.length > 0) {
       pElements.forEach((elem) => {
-        const begin = parseTime(elem.getAttribute('begin') || '0');
-        const end = parseTime(elem.getAttribute('end') || '0');
+        const tAttr = elem.getAttribute('t');
+        let begin: number;
+        let end: number;
+        if (tAttr !== null) {
+          begin = parseInt(tAttr, 10) || 0;
+          end = begin + (parseInt(elem.getAttribute('d') || '0', 10) || 0);
+        } else {
+          begin = parseTime(elem.getAttribute('begin') || '0');
+          end = parseTime(elem.getAttribute('end') || '0');
+        }
         const text = decodeHTMLEntities(extractTextContent(elem));
 
         if (text && end > begin) {
@@ -524,8 +540,9 @@ export function parseYouTubeJSON3(content: string): Cue[] {
   try {
     const data = JSON.parse(content);
     
-    // Validate it's JSON3 format
-    if (data.wireMagic !== "pb3" || !Array.isArray(data.events)) {
+    // Validate it's JSON3 format. wireMagic is optional — some player
+    // refetches omit it — the events array defines the format.
+    if (!Array.isArray(data.events)) {
       warn('Parser: Not valid JSON3 format');
       return [];
     }
