@@ -61,6 +61,15 @@ async function init(): Promise<void> {
     }, 300);
   });
 
+  // Live update from the content script: cue processing finished (a track
+  // switch, upload or new segments) — refresh the status/counters without
+  // a popup reopen.
+  browser.runtime.onMessage.addListener((msg: { type?: string }) => {
+    if (msg?.type === "cuesUpdated") {
+      void loadStatus();
+    }
+  });
+
   // Show current drift-correction state (content script may not respond —
   // e.g. popup opened on a non-video tab — in which case defaults remain)
   refreshDriftStatus();

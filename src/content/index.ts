@@ -5147,6 +5147,15 @@ function processCues(newCues: Cue[], options: { replace?: boolean } = {}): void 
       `NOT starting monitoring: cues=${cues.length}, videoElement=${!!videoElement}`,
     );
   }
+
+  // Live popup refresh: the cue set just changed (track switch, upload,
+  // new segments) — ping the popup so its stat counters update without a
+  // reopen.
+  browser.runtime
+    .sendMessage({ type: "cuesUpdated" })
+    .catch(() => {
+      // Popup may not be open, ignore
+    });
 }
 
 /**
