@@ -86,6 +86,13 @@ function setupEventHandlers(): void {
   const resetSyncBtn = document.getElementById("resetSyncBtn") as HTMLButtonElement | null;
   syncNowBtn?.addEventListener("click", handleSyncNow);
   resetSyncBtn?.addEventListener("click", handleResetSync);
+
+  // Automatic timing reflects per-video session state (a manual track pick
+  // pauses it) — see handleAutoTimingToggle.
+  const autoTimingToggle = document.getElementById(
+    "autoTimingToggle",
+  ) as HTMLInputElement | null;
+  autoTimingToggle?.addEventListener("change", () => void handleAutoTimingToggle());
   
   // Full options link opens in new tab
   openFullOptions.addEventListener("click", (e) => {
@@ -606,6 +613,9 @@ async function handleSelectTrack(track: SubtitleTrack): Promise<void> {
     currentTrack = track;
     updateTrackSection();
     trackList.classList.add("hidden");
+    // The pick pauses automatic timing for this video — refresh the drift
+    // section so the Automatic timing checkbox reflects it.
+    setTimeout(refreshDriftStatus, 300);
   } catch (err) {
     error("Failed to select track:", err);
   }
@@ -707,6 +717,10 @@ interface DriftStatus {
   enabled: boolean;
   autoEnabled?: boolean;
   autoWatching?: boolean;
+  /** Automatic timing paused by an explicit track pick (session state) */
+  suspended?: boolean;
+  /** The viewer's uploaded subtitle file is active for this tab */
+  userUploadActive?: boolean;
 }
 
 /**
@@ -754,6 +768,43 @@ async function handleResetSync(): Promise<void> {
 }
 
 /**
+ * Toggle automatic timing from the popup. Unlike the options checkbox, this
+ * reflects per-video session state: a manual track pick pauses automatic
+ * timing while the global setting stays on, so switching it back on also
+ * tells the content script to resume arbitration (the picked track remains
+ * final — it is corrected in place, never switched).
+ */
+async function handleAutoTimingToggle(): Promise<void> {
+  const toggleEl = document.getElementById("autoTimingToggle") as HTMLInputElement | null;
+  if (!toggleEl) return;
+  const on = toggleEl.checked;
+  try {
+    const result = (await browser.storage.local.get("settings")) as {
+      settings?: Partial<Settings>;
+    };
+    const existing = result.settings || {};
+    await browser.storage.local.set({
+      settings: { ...existing, autoDriftCorrection: on },
+    });
+  } catch (err) {
+    error("Failed to persist auto timing setting:", err);
+  }
+  if (on) {
+    // When the global setting was already on, persisting produced no
+    // storage change — signal the resume explicitly.
+    const tabId = await getActiveTabId();
+    if (tabId) {
+      try {
+        await browser.tabs.sendMessage(tabId, { type: "resumeAutoTiming" });
+      } catch {
+        // Content script not in this tab
+      }
+    }
+  }
+  setTimeout(refreshDriftStatus, 300);
+}
+
+/**
  * Query the content script for current drift status and render it.
  */
 async function refreshDriftStatus(): Promise<void> {
@@ -778,17 +829,35 @@ function renderDriftStatus(status: DriftStatus): void {
   const statusEl = document.getElementById("driftStatus");
   if (!statusEl) return;
 
+  const toggleEl = document.getElementById("autoTimingToggle") as HTMLInputElement | null;
+  const suspended = status.suspended === true;
+  const uploadActive = status.userUploadActive === true;
+
+  // Mirror the per-video state: a manual track pick pauses automatic timing
+  // even though the global setting stays on, and the viewer's uploaded file
+  // is shown as-is (automation stays off for it).
+  if (toggleEl) {
+    toggleEl.disabled = uploadActive;
+    toggleEl.checked = status.autoEnabled === true && !suspended && !uploadActive;
+  }
+
   if (!status.enabled) {
     statusEl.textContent = status.hasModel ? "Correction paused" : "No correction";
     return;
   }
 
   if (!status.hasModel) {
-    statusEl.textContent = status.autoEnabled
-      ? status.autoWatching
-        ? "Auto-sync watching"
-        : "Auto-sync armed"
-      : "Manual mode — offset slider only";
+    if (status.autoEnabled) {
+      if (uploadActive) {
+        statusEl.textContent = "Manual mode — your file, offset slider only";
+      } else if (suspended) {
+        statusEl.textContent = "Paused — track picked manually";
+      } else {
+        statusEl.textContent = status.autoWatching ? "Auto-sync watching" : "Auto-sync armed";
+      }
+    } else {
+      statusEl.textContent = "Manual mode — offset slider only";
+    }
     return;
   }
 
@@ -823,6 +892,7 @@ async function handleUnload(): Promise<void> {
     isUserUploadActive = false;
     currentTrack = null;
     await loadStatus();
+    setTimeout(refreshDriftStatus, 300);
   } catch (err) {
     error("Failed to unload cues:", err);
   }

@@ -58,6 +58,10 @@
     <!-- Drift / Sync Correction -->
     <div class="drift-section" id="driftSection">
       <div class="drift-label">Audio Sync</div>
+      <label class="checkbox-label drift-auto" title="Watches the site's own subtitles and cross-checks the selected track. Picking a track by hand pauses this for the video — tick it again to resume (your track is never switched by itself).">
+        <input type="checkbox" id="autoTimingToggle">
+        <span>Automatic timing</span>
+      </label>
       <div class="drift-status" id="driftStatus">No correction</div>
       <div class="drift-buttons">
         <button id="syncNowBtn" class="secondary small" title="Manual fix: marks the subtitle line currently displayed as being spoken right now (also Alt+S). Each capture refines the correction model. If sync is wrong in a new way, try Reset.">✓ Sync now</button>

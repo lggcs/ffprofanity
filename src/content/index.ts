@@ -162,14 +162,23 @@ let coverageUpgradeSuspended = false;
 //             reference has the better track prior, otherwise keep the
 //             display and let native-pairing models correct it.
 //   inconclusive — no confident fit; keep today's behavior, no switch.
-// The viewer's explicit track pick (coverageUpgradeSuspended) suspends all
-// of it: their ear decides which track plays and how it is corrected.
+// The viewer's explicit track pick suspends arbitration (syncSuspended),
+// just like the coverage search (coverageUpgradeSuspended). Re-checking
+// "Automatic sync correction" resumes arbitration — but the picked track
+// itself stays pinned (syncUserLocked): it may be verified and corrected,
+// never switched away from. Their ear decides.
 const syncVerdictByTrack = new Map<string, "aligned" | "odd" | "inconclusive">();
 const syncPendingKeys = new Set<string>();
 const syncRefTried = new Map<string, Set<string>>();
 const syncRefCueCache = new Map<string, Cue[]>();
 const syncSwitchedAway = new Set<string>();
 const syncNativeSuppressed = new Set<string>();
+// Track keys the viewer chose by hand: arbitration runs on them (verdicts,
+// native-model veto) but is never allowed to switch them.
+const syncUserLocked = new Set<string>();
+// Arbitration paused by an explicit pick; cleared when the viewer
+// re-enables automatic timing. The track-swap machinery stays suspended.
+let syncSuspended = false;
 /** Reference fetches per displayed track per session (bandwidth bound) */
 const SYNC_MAX_REF_ATTEMPTS = 2;
 const SYNC_REF_CACHE_MAX = 8;
@@ -406,6 +415,8 @@ async function resetSessionForVideoChange(): Promise<void> {
   syncRefCueCache.clear();
   syncSwitchedAway.clear();
   syncNativeSuppressed.clear();
+  syncUserLocked.clear();
+  syncSuspended = false;
 
   if (overlayContainer) {
     const cueEl = overlayContainer.querySelector<HTMLElement>(".ffprofanity-cue");
@@ -1903,6 +1914,8 @@ function addDetectedTracks(tracks: SubtitleTrack[], forceSelection = false): voi
     }
     if (isExplicitUserPick) {
       coverageUpgradeSuspended = true;
+      syncSuspended = true;
+      syncUserLocked.add(trackKey(trackToSelect));
       // The viewer's pick is final: drop every sync-arbitration verdict so
       // automatic machinery never overrides the track they chose.
       syncVerdictByTrack.clear();
@@ -2637,8 +2650,8 @@ function applyHeldNativeModel(): void {
 /**
  * Automatic timing actions may run only while the viewer has not taken
  * direct control. An explicit track pick (popup or the site's own menu)
- * suspends everything — the viewer's ear is the final authority on which
- * track plays and how it is corrected.
+ * suspends arbitration until they re-enable automatic timing; the picked
+ * track stays switch-proof (syncUserLocked) — their ear decides.
  */
 function autoTimingAllowed(track: SubtitleTrack): boolean {
   return (
@@ -2646,7 +2659,7 @@ function autoTimingAllowed(track: SubtitleTrack): boolean {
     driftEnabled &&
     settings.autoSelectTrack &&
     !userUploadActive &&
-    !coverageUpgradeSuspended &&
+    !syncSuspended &&
     track.source !== "user" &&
     !!track.url &&
     !isStreamingTrackSource(track)
@@ -2722,7 +2735,7 @@ async function maybeSettleSyncVerdict(): Promise<void> {
   try {
     let fitted: { result: ReconcileResult; ref: SubtitleTrack } | null = null;
     for (const ref of candidates.slice(0, SYNC_MAX_REF_ATTEMPTS)) {
-      if (coverageUpgradeSuspended) return;
+      if (syncSuspended) return;
       const refUrl = ref.url;
       if (!refUrl) continue;
       tried.add(trackKey(ref));
@@ -2779,7 +2792,19 @@ async function maybeSettleSyncVerdict(): Promise<void> {
 
     // Significant disagreement: the display is the odd one out.
     syncVerdictByTrack.set(key, "odd");
-    if (coverageUpgradeSuspended || userUploadActive) return;
+    if (syncUserLocked.has(key)) {
+      // Never switch a track the viewer picked. State the disagreement and
+      // leave the decision — and the fine-tuning — to them.
+      const offSec = Math.abs(model.offsetMs) / 1000;
+      showNotification(
+        "info",
+        `"${track.label}" is ~${offSec.toFixed(1)}s off vs "${fitted.ref.label}" — keeping your pick`,
+        false,
+      );
+      applyHeldNativeModel();
+      return;
+    }
+    if (userUploadActive) return;
     const refCoverage = durationMs > 0 ? trackCoverageRatio(fitted.ref, durationMs) : null;
     if (refCoverage !== null && refCoverage < COVERAGE_ACCEPTABLE_RATIO) {
       log(`Sync arbitration: keeping "${track.label}" — "${fitted.ref.label}" does not cover the runtime`);
@@ -3013,6 +3038,8 @@ function getDriftStatus(): {
   enabled: boolean;
   autoEnabled: boolean;
   autoWatching: boolean;
+  suspended: boolean;
+  userUploadActive: boolean;
 } {
   const model = driftCorrector.current;
   return {
@@ -3024,6 +3051,8 @@ function getDriftStatus(): {
     enabled: driftEnabled,
     autoEnabled: autoDriftEnabled,
     autoWatching: adoptedNativeTrack !== null,
+    suspended: syncSuspended,
+    userUploadActive,
   };
 }
 
@@ -4008,7 +4037,15 @@ function handleStorageChange(
         autoDriftLastVideoMs = 0;
         autoDriftLastAttemptMs = 0;
         setupAutoDriftWatch();
-        showNotification("info", "Auto sync on — corrections apply automatically", false);
+        if (syncSuspended) {
+          // Re-checking "Automatic sync correction" is the viewer asking
+          // for automatic timing on this video again.
+          syncSuspended = false;
+          showNotification("info", "Automatic timing resumed", false);
+        } else {
+          showNotification("info", "Auto sync on — corrections apply automatically", false);
+        }
+        void maybeSettleSyncVerdict();
       } else {
         teardownAutoDriftWatch();
         // Drop auto-captured anchors and any model they fitted; user
@@ -4230,6 +4267,16 @@ async function handleMessage(message: unknown): Promise<unknown> {
         driftEnabled ? "Sync correction enabled" : "Sync correction disabled — offset slider still applies",
         false,
       );
+      break;
+    }
+
+    case "resumeAutoTiming": {
+      // Popup "Automatic timing" ticked again after a manual pick.
+      if (!syncSuspended) break;
+      syncSuspended = false;
+      log("Sync arbitration resumed: the viewer re-enabled automatic timing");
+      showNotification("info", "Automatic timing resumed", false);
+      void maybeSettleSyncVerdict();
       break;
     }
 
