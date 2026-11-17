@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COVERAGE_ACCEPTABLE_RATIO,
   calculateRecommendScore,
+  isVariantTrackLabel,
   selectBestTrack,
   trackCoverageRatio,
   trackKey,
@@ -137,5 +138,36 @@ describe("trackKey", () => {
 
   it("falls back to the id for tracks without a URL", () => {
     expect(trackKey(track({ id: "embedded-1", url: undefined }))).toBe("embedded-1");
+  });
+});
+
+describe("variant track labels", () => {
+  it("recognizes lookmovie-style variant suffixes", () => {
+    expect(isVariantTrackLabel("English 1 A")).toBe(true);
+    expect(isVariantTrackLabel("English (a)")).toBe(true);
+    expect(isVariantTrackLabel("English 2 B")).toBe(true);
+    expect(isVariantTrackLabel("english 1 a")).toBe(true);
+    expect(isVariantTrackLabel("English 4")).toBe(false);
+    expect(isVariantTrackLabel("English")).toBe(false);
+    expect(isVariantTrackLabel("English SDH")).toBe(false);
+    expect(isVariantTrackLabel("UNKNOWN")).toBe(false);
+  });
+
+  it("ranks a variant release below the plain release of the same language", () => {
+    const variant = track({ id: "variant", label: "English 1 A" });
+    const plain = track({ id: "plain", label: "English" });
+    expect(calculateRecommendScore(variant, settings)).toBeLessThan(
+      calculateRecommendScore(plain, settings),
+    );
+  });
+
+  it("still auto-selects a lone variant track", () => {
+    // The demotion must not veto the only candidate: 10 (language) − 4 stays
+    // auto-selectable, like the truncated-track coverage rule.
+    const variant = track({ id: "variant", label: "English 1 A" });
+    expect(calculateRecommendScore(variant, settings)).toBeGreaterThanOrEqual(0);
+    const selection = selectBestTrack([variant], settings);
+    expect(selection.track?.id).toBe("variant");
+    expect(selection.autoSelected).toBe(true);
   });
 });

@@ -78,6 +78,21 @@ export function isForcedTrack(track: SubtitleTrack): boolean {
 }
 
 /**
+ * "(a)"/"B"-suffixed alternate releases of the same captions (lookmovie2:
+ * "English 1 A", "English (a)"). Sites mark auto-generated or re-authored
+ * copies this way, and those releases are the ones most often out of sync
+ * with the actual transfer (OCR text, wrong fps master). Selection prior only.
+ */
+export function isVariantTrackLabel(label: string): boolean {
+  const trimmed = label.trim();
+  return (
+    /(^|\s)\((a|b|c)\)$/i.test(trimmed) ||
+    /\d\s+\([a-c]\)$/i.test(trimmed) ||
+    /\d\s+[a-c]$/i.test(trimmed)
+  );
+}
+
+/**
  * Fraction of the runtime a track's cues reach. Sites routinely serve several
  * files for the same language where only one spans the whole video, so this is
  * the signal that separates a complete track from a truncated one.
@@ -163,6 +178,14 @@ export function calculateRecommendScore(
   // Default track gets a small bonus (+2)
   if (track.isDefault) {
     score += 2;
+  }
+
+  // "(a)"-style variant releases are frequently ASR/OCR re-encodes authored
+  // against a different transfer — the ones most often out of sync. Demote
+  // when a normal release competes; the penalty must not sink a lone
+  // candidate below zero (10 + 2 − 4 stays selectable).
+  if (isVariantTrackLabel(track.label)) {
+    score -= 4;
   }
 
   // User-uploaded tracks get priority (+15)
